@@ -12,3 +12,9 @@ dependencies = [
     "python-multipart>=0.0.32",
     "uvicorn>=0.50.0",
 ]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "ruff>=0.15.20",
+]

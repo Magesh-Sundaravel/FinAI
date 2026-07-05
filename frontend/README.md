@@ -1,32 +1,23 @@
-# React + TypeScript + Vite
+# Finance AI Agents - React Frontend ⚛️⚡
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This is the interactive frontend client for the FinAI dashboard.
 
-Currently, two official plugins are available:
+## 🚀 Getting Started
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. **Install node dependencies**:
+   ```bash
+   npm install
+   ```
 
-## React Compiler
+2. **Launch dev server**:
+   ```bash
+   npm run dev
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+3. **Open browser**:
+   Navigate to the local address outputted in the terminal (usually `http://localhost:5173`).
 
-## Expanding the Oxlint configuration
+## 📁 Key Files
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- `src/App.tsx` - Layout and application state. Controls tabs (Dashboard, Expenses, AI Agent, Ingest) and manages connection to backend endpoints. Also features responsive SVG charts and an automated offline/sandbox mode with dummy data.
+- `src/index.css` - Custom CSS theme specifying the deep-dark visual architecture, glassmorphic layout tokens, custom sliders, grids, table panels, and message bubbles.

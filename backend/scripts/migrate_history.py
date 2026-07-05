@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 from datetime import datetime
-import pandas as pd
+import pandas as pd  # type: ignore
 
 # Add the parent directory (backend/) to the python path to allow importing app modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

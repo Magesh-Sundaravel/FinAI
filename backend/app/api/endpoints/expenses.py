@@ -1,26 +1,15 @@
 import os
-import json
-import uuid
 from typing import List, Optional
 from datetime import datetime
-import pandas as pd
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
-from pydantic import BaseModel, Field
+import pandas as pd  # type: ignore
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from pydantic import BaseModel
+from sqlmodel import Session, select, delete
+from sqlalchemy import func
+from app.db import engine, get_session
+from app.models import Expense as DBExpense
 
 router = APIRouter()
-
-DB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
-DB_FILE = os.path.join(DB_DIR, "expenses.json")
-
-# Ensure database directory exists
-os.makedirs(DB_DIR, exist_ok=True)
-
-class Expense(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    date: str
-    description: str
-    category: str
-    amount: float
 
 class ExpenseCreate(BaseModel):
     date: str
@@ -28,26 +17,50 @@ class ExpenseCreate(BaseModel):
     category: str
     amount: float
 
-def load_expenses() -> List[Expense]:
-    if not os.path.exists(DB_FILE):
-        return []
-    try:
-        with open(DB_FILE, "r") as f:
-            data = json.load(f)
-            return [Expense(**item) for item in data]
-    except Exception:
-        return []
+def get_season(date_val) -> str:
+    """
+    Derive the season name based on a date object's month.
+    """
+    month = date_val.month
+    if month in [12, 1, 2]:
+        return "Winter"
+    elif month in [3, 4, 5]:
+        return "Spring"
+    elif month in [6, 7, 8]:
+        return "Summer"
+    else:
+        return "Autumn"
 
-def save_expenses(expenses: List[Expense]):
-    with open(DB_FILE, "w") as f:
-        json.dump([e.model_dump() for e in expenses], f, indent=2)
+def load_expenses() -> List[DBExpense]:
+    """
+    Load all expenses from the database for compatibility/fallback.
+    """
+    with Session(engine) as session:
+        statement = select(DBExpense).order_by(DBExpense.date.desc())  # type: ignore
+        results = session.exec(statement).all()
+        return list(results)
+
+def clean_amount(val) -> float:
+    """
+    Clean currency format and convert to float.
+    """
+    if pd.isna(val):
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+
+    # String cleaning
+    str_val = str(val).replace("€", "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(str_val)
+    except ValueError:
+        return 0.0
 
 def detect_columns(columns):
     """
     Attempt to map input spreadsheet columns to Date, Description, Amount, and Category.
     """
     col_map = {"date": None, "description": None, "amount": None, "category": None}
-    
     cols_lower = [str(c).lower().strip() for c in columns]
     
     # Map Date
@@ -70,7 +83,7 @@ def detect_columns(columns):
 
     # Map Amount
     for idx, col in enumerate(cols_lower):
-        if any(term in col for term in ["amount", "cost", "price", "value", "spent", "charge"]):
+        if any(term in col for term in ["amount", "cost", "price", "value", "spent", "charge", "eur"]):
             col_map["amount"] = columns[idx]
             break
             
@@ -82,47 +95,56 @@ def detect_columns(columns):
             
     return col_map
 
-@router.get("/", response_model=List[Expense])
-def get_expenses(category: Optional[str] = None):
-    expenses = load_expenses()
+@router.get("/", response_model=List[DBExpense])
+def get_expenses(
+    category: Optional[str] = None,
+    session: Session = Depends(get_session)
+):
+    statement = select(DBExpense)
     if category:
-        expenses = [e for e in expenses if e.category.lower() == category.lower()]
-    # Sort by date descending
-    try:
-        expenses.sort(key=lambda x: x.date, reverse=True)
-    except Exception:
-        pass
-    return expenses
+        statement = statement.where(func.lower(DBExpense.category) == category.lower())
+    statement = statement.order_by(DBExpense.date.desc())  # type: ignore
+    results = session.exec(statement).all()
+    return list(results)
 
-@router.post("/", response_model=Expense)
-def create_expense(expense_in: ExpenseCreate):
-    expenses = load_expenses()
-    
-    # Simple validation of date format
+@router.post("/", response_model=DBExpense)
+def create_expense(
+    expense_in: ExpenseCreate,
+    session: Session = Depends(get_session)
+):
+    # Validate/parse date format
     try:
-        datetime.strptime(expense_in.date, "%Y-%m-%d")
+        parsed_date = datetime.strptime(expense_in.date, "%Y-%m-%d").date()
     except ValueError:
-        # Fallback to current date or try parsing
-        pass
+        # Fallback to today's date if invalid format
+        parsed_date = datetime.utcnow().date()
         
-    expense = Expense(
-        date=expense_in.date,
+    season = get_season(parsed_date)
+    
+    expense = DBExpense(
+        date=parsed_date,
+        season=season,
         description=expense_in.description,
         category=expense_in.category or "Uncategorized",
-        amount=expense_in.amount
+        amount=round(expense_in.amount, 2)
     )
-    expenses.append(expense)
-    save_expenses(expenses)
+    session.add(expense)
+    session.commit()
+    session.refresh(expense)
     return expense
 
 @router.delete("/clear")
-def clear_expenses():
-    save_expenses([])
+def clear_expenses(session: Session = Depends(get_session)):
+    session.exec(delete(DBExpense))
+    session.commit()
     return {"message": "All expenses cleared successfully"}
 
 @router.post("/upload")
-def upload_file(file: UploadFile = File(...)):
-    filename = file.filename
+def upload_file(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session)
+):
+    filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
     
     if ext not in [".csv", ".xlsx", ".xls"]:
@@ -143,7 +165,7 @@ def upload_file(file: UploadFile = File(...)):
         
         # We need at least Date and Amount
         if not mapping["date"] or not mapping["amount"]:
-            # Fallback to first column as date, second as description, third as amount
+            # Fallback mapping based on index
             cols = df.columns
             mapping["date"] = cols[0] if len(cols) > 0 else None
             mapping["description"] = cols[1] if len(cols) > 1 else None
@@ -154,49 +176,55 @@ def upload_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Could not automatically identify Date and Amount columns in the spreadsheet.")
             
         imported_count = 0
-        expenses = load_expenses()
+        expenses_to_insert = []
         
         # Iteratively build Expense objects
         for _, row in df.iterrows():
             # Date parsing
             raw_date = row[mapping["date"]]
-            parsed_date = "2026-01-01"  # fallback
-            if pd.notna(raw_date):
+            if pd.isna(raw_date):
+                continue
+                
+            try:
+                parsed_date = pd.to_datetime(raw_date).date()
+            except Exception:
                 try:
-                    # Let pandas handle parsing date strings or timestamps
-                    parsed_date = pd.to_datetime(raw_date).strftime("%Y-%m-%d")
+                    parsed_date = datetime.strptime(str(raw_date)[:10], "%Y-%m-%d").date()
                 except Exception:
-                    parsed_date = str(raw_date)[:10]
+                    continue # Skip row if date is invalid
                     
             # Description parsing
             raw_desc = row[mapping["description"]] if mapping["description"] in df.columns else "No Description"
-            description = str(raw_desc) if pd.notna(raw_desc) else "No Description"
+            description = str(raw_desc).strip() if pd.notna(raw_desc) else "No Description"
             
             # Amount parsing
             raw_amt = row[mapping["amount"]]
-            try:
-                # Clean up currency symbols or string values if any
-                if isinstance(raw_amt, str):
-                    raw_amt = raw_amt.replace("$", "").replace(",", "").strip()
-                amount = float(raw_amt)
-            except Exception:
+            amount = clean_amount(raw_amt)
+            if amount <= 0:
                 continue # Skip row if amount is invalid
+            amount = round(amount, 2)
                 
             # Category parsing
             raw_cat = row[mapping["category"]] if mapping["category"] in df.columns else "Uncategorized"
-            category = str(raw_cat) if pd.notna(raw_cat) else "Uncategorized"
+            category = str(raw_cat).strip() if pd.notna(raw_cat) else "Uncategorized"
             
-            expense = Expense(
+            season = get_season(parsed_date)
+            
+            db_expense = DBExpense(
                 date=parsed_date,
+                season=season,
                 description=description,
                 category=category,
                 amount=amount
             )
-            expenses.append(expense)
+            expenses_to_insert.append(db_expense)
             imported_count += 1
             
-        save_expenses(expenses)
-        
+        if expenses_to_insert:
+            for exp in expenses_to_insert:
+                session.add(exp)
+            session.commit()
+            
         return {
             "message": f"Successfully imported {imported_count} expenses.",
             "columns_detected": {k: str(v) for k, v in mapping.items() if v is not None}
@@ -206,8 +234,10 @@ def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
 
 @router.get("/summary")
-def get_summary():
-    expenses = load_expenses()
+def get_summary(session: Session = Depends(get_session)):
+    statement = select(DBExpense)
+    expenses = session.exec(statement).all()
+    
     if not expenses:
         return {
             "total_spent": 0.0,
@@ -222,9 +252,9 @@ def get_summary():
     avg_tx = total_spent / count if count > 0 else 0
     
     # By Category
-    by_category = {}
+    by_category: dict[str, float] = {}
     # By Month
-    by_month = {}
+    by_month: dict[str, float] = {}
     
     for e in expenses:
         # Category aggregation
@@ -233,8 +263,7 @@ def get_summary():
         
         # Month aggregation (YYYY-MM)
         try:
-            month = e.date[:7] # Get YYYY-MM
-            # Validate format is YYYY-MM
+            month = e.date.strftime("%Y-%m-%d")[:7] # Get YYYY-MM
             if len(month) == 7 and month[4] == "-":
                 by_month[month] = by_month.get(month, 0.0) + e.amount
             else:

@@ -1,0 +1,32 @@
+# Python virtual environments and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+.python-version
+.uv/
+
+# Node.js / Vite build output and dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+.oxlintrc.json
+.vite/
+
+# Local databases and spreadsheets
+backend/data/expenses.json
+
+# Environment variables
+.env
+.env.local
+
+# Operating System files
+.DS_Store
+Thumbs.db
+*.log

@@ -20,6 +20,7 @@ class ExpenseCreate(BaseModel):
     description: str
     category: str
     amount: float
+    bill_image_url: Optional[str] = None
 
 class ExpenseExtraction(BaseModel):
     description: str = Field(description="The merchant, vendor, or utility provider name (e.g. Enel, Conad, Esselunga, Fastweb, etc.).")
@@ -136,7 +137,8 @@ def create_expense(
         season=season,
         description=expense_in.description,
         category=expense_in.category or "Uncategorized",
-        amount=round(expense_in.amount, 2)
+        amount=round(expense_in.amount, 2),
+        bill_image_url=expense_in.bill_image_url
     )
     session.add(expense)
     session.commit()
@@ -152,6 +154,7 @@ def clear_expenses(session: Session = Depends(get_session)):
 @router.post("/upload")
 def upload_file(
     file: UploadFile = File(...),
+    save: bool = True,
     session: Session = Depends(get_session)
 ):
     filename = file.filename or ""
@@ -240,12 +243,13 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                 bill_image_url=f"/uploads/{unique_filename}"
             )
             
-            session.add(db_expense)
-            session.commit()
-            session.refresh(db_expense)
+            if save:
+                session.add(db_expense)
+                session.commit()
+                session.refresh(db_expense)
             
             return {
-                "message": "Successfully parsed and imported receipt/bill.",
+                "message": "Successfully parsed and imported receipt/bill." if save else "Successfully parsed receipt/bill.",
                 "type": "image",
                 "expense": db_expense
             }

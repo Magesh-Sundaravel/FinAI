@@ -501,7 +501,7 @@ Or start the backend server to link actual spreadsheet parser results!`
             fontSize: '12px',
             fontWeight: '600',
             display: 'flex',
-            align-items: 'center',
+            alignItems: 'center',
             gap: '6px'
           }}>
             <AlertCircle size={14} /> Local Sandbox Mode

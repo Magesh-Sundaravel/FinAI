@@ -1,12 +1,21 @@
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.api.endpoints import expenses, agent
+from app.db import init_db
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize database tables (SQLite or Postgres depending on environment)
+    init_db()
+    yield
 
 app = FastAPI(
     title="Finance AI Agents API",
     description="Backend API for parsing spreadsheets, categorizing expenses, and running AI financial agents.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Enable CORS for the React/Vite frontend

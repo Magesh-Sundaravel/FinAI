@@ -1,6 +1,8 @@
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from app.api.endpoints import expenses, agent
 from app.db import init_db
@@ -26,6 +28,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Create uploads directory in data folder
+uploads_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "uploads")
+os.makedirs(uploads_dir, exist_ok=True)
+
+# Mount static files
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 # Include routers
 app.include_router(expenses.router, prefix="/api/expenses", tags=["Expenses"])

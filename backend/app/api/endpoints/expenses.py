@@ -1,11 +1,15 @@
 import os
+import uuid
+import json
 from typing import List, Optional
 from datetime import datetime
 import pandas as pd  # type: ignore
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select, delete
 from sqlalchemy import func
+from google import genai
+from google.genai import types
 from app.db import engine, get_session
 from app.models import Expense as DBExpense
 
@@ -16,6 +20,12 @@ class ExpenseCreate(BaseModel):
     description: str
     category: str
     amount: float
+
+class ExpenseExtraction(BaseModel):
+    description: str = Field(description="The merchant, vendor, or utility provider name (e.g. Enel, Conad, Esselunga, Fastweb, etc.).")
+    category: str = Field(description="The category of spend: Choose the most appropriate from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.")
+    amount: float = Field(description="The total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.")
+    date: str = Field(description="The transaction or invoice date in YYYY-MM-DD format.")
 
 def get_season(date_val) -> str:
     """
@@ -147,89 +157,183 @@ def upload_file(
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
     
-    if ext not in [".csv", ".xlsx", ".xls"]:
-        raise HTTPException(status_code=400, detail="Only CSV or Excel files are supported.")
+    if ext not in [".csv", ".xlsx", ".xls", ".png", ".jpg", ".jpeg", ".webp"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file format. Please upload a spreadsheet (.csv, .xlsx, .xls) or an image (.png, .jpg, .jpeg, .webp)."
+        )
         
     try:
-        # Read file into DataFrame
-        if ext == ".csv":
-            df = pd.read_csv(file.file)
-        else:
-            df = pd.read_excel(file.file)
-            
-        if df.empty:
-            raise HTTPException(status_code=400, detail="The uploaded file is empty.")
-            
-        # Detect mapping
-        mapping = detect_columns(df.columns)
-        
-        # We need at least Date and Amount
-        if not mapping["date"] or not mapping["amount"]:
-            # Fallback mapping based on index
-            cols = df.columns
-            mapping["date"] = cols[0] if len(cols) > 0 else None
-            mapping["description"] = cols[1] if len(cols) > 1 else None
-            mapping["amount"] = cols[2] if len(cols) > 2 else None
-            mapping["category"] = cols[3] if len(cols) > 3 else None
-            
-        if not mapping["date"] or not mapping["amount"]:
-            raise HTTPException(status_code=400, detail="Could not automatically identify Date and Amount columns in the spreadsheet.")
-            
-        imported_count = 0
-        expenses_to_insert = []
-        
-        # Iteratively build Expense objects
-        for _, row in df.iterrows():
-            # Date parsing
-            raw_date = row[mapping["date"]]
-            if pd.isna(raw_date):
-                continue
+        # 1. Handle Image Upload & Gemini Vision OCR
+        if ext in [".png", ".jpg", ".jpeg", ".webp"]:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="GEMINI_API_KEY environment variable is not set. Cannot run OCR parser."
+                )
                 
+            # Read file bytes
+            file_bytes = file.file.read()
+            if not file_bytes:
+                raise HTTPException(status_code=400, detail="The uploaded image is empty.")
+                
+            # Create uploads directory if it doesn't exist
+            uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
+            os.makedirs(uploads_dir, exist_ok=True)
+            
+            # Save file to disk with unique name
+            unique_filename = f"{uuid.uuid4()}{ext}"
+            file_path = os.path.join(uploads_dir, unique_filename)
+            with open(file_path, "wb") as f:
+                f.write(file_bytes)
+                
+            # Invoke google-genai Client
+            client = genai.Client(api_key=api_key)
+            
+            image_part = types.Part.from_bytes(
+                data=file_bytes,
+                mime_type=file.content_type or f"image/{ext[1:] if ext != '.jpg' else 'jpeg'}"
+            )
+            
+            prompt = """
+Analyze the uploaded bill or receipt image. Extract the following information:
+1. Merchant/Vendor/Utility provider name (e.g. Enel, Conad, Esselunga, Fastweb).
+2. Category of spend: Choose the most appropriate category from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.
+3. Total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.
+4. Transaction or invoice date in YYYY-MM-DD format.
+"""
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[image_part, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ExpenseExtraction
+                )
+            )
+            
+            if not response.text:
+                raise HTTPException(status_code=500, detail="Empty response received from Gemini API.")
+                
+            extracted = json.loads(response.text)
+            
+            # Parse date
+            date_str = extracted.get("date")
             try:
-                parsed_date = pd.to_datetime(raw_date).date()
+                parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
             except Exception:
-                try:
-                    parsed_date = datetime.strptime(str(raw_date)[:10], "%Y-%m-%d").date()
-                except Exception:
-                    continue # Skip row if date is invalid
-                    
-            # Description parsing
-            raw_desc = row[mapping["description"]] if mapping["description"] in df.columns else "No Description"
-            description = str(raw_desc).strip() if pd.notna(raw_desc) else "No Description"
-            
-            # Amount parsing
-            raw_amt = row[mapping["amount"]]
-            amount = clean_amount(raw_amt)
-            if amount <= 0:
-                continue # Skip row if amount is invalid
-            amount = round(amount, 2)
+                parsed_date = datetime.utcnow().date()
                 
-            # Category parsing
-            raw_cat = row[mapping["category"]] if mapping["category"] in df.columns else "Uncategorized"
-            category = str(raw_cat).strip() if pd.notna(raw_cat) else "Uncategorized"
-            
             season = get_season(parsed_date)
+            description = extracted.get("description", "Unknown Merchant").strip()
+            category = extracted.get("category", "Groceries").strip()
+            amount = clean_amount(extracted.get("amount", 0.0))
+            amount = round(amount, 2)
             
             db_expense = DBExpense(
                 date=parsed_date,
                 season=season,
                 description=description,
                 category=category,
-                amount=amount
+                amount=amount,
+                bill_image_url=f"/uploads/{unique_filename}"
             )
-            expenses_to_insert.append(db_expense)
-            imported_count += 1
             
-        if expenses_to_insert:
-            for exp in expenses_to_insert:
-                session.add(exp)
+            session.add(db_expense)
             session.commit()
+            session.refresh(db_expense)
             
-        return {
-            "message": f"Successfully imported {imported_count} expenses.",
-            "columns_detected": {k: str(v) for k, v in mapping.items() if v is not None}
-        }
-        
+            return {
+                "message": "Successfully parsed and imported receipt/bill.",
+                "type": "image",
+                "expense": db_expense
+            }
+            
+        # 2. Handle Spreadsheet Ingestion
+        else:
+            # Read file into DataFrame
+            if ext == ".csv":
+                df = pd.read_csv(file.file)
+            else:
+                df = pd.read_excel(file.file)
+                
+            if df.empty:
+                raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+                
+            # Detect mapping
+            mapping = detect_columns(df.columns)
+            
+            # We need at least Date and Amount
+            if not mapping["date"] or not mapping["amount"]:
+                # Fallback mapping based on index
+                cols = df.columns
+                mapping["date"] = cols[0] if len(cols) > 0 else None
+                mapping["description"] = cols[1] if len(cols) > 1 else None
+                mapping["amount"] = cols[2] if len(cols) > 2 else None
+                mapping["category"] = cols[3] if len(cols) > 3 else None
+                
+            if not mapping["date"] or not mapping["amount"]:
+                raise HTTPException(status_code=400, detail="Could not automatically identify Date and Amount columns in the spreadsheet.")
+                
+            imported_count = 0
+            expenses_to_insert = []
+            
+            # Iteratively build Expense objects
+            for _, row in df.iterrows():
+                # Date parsing
+                raw_date = row[mapping["date"]]
+                if pd.isna(raw_date):
+                    continue
+                    
+                try:
+                    parsed_date = pd.to_datetime(raw_date).date()
+                except Exception:
+                    try:
+                        parsed_date = datetime.strptime(str(raw_date)[:10], "%Y-%m-%d").date()
+                    except Exception:
+                        continue # Skip row if date is invalid
+                        
+                # Description parsing
+                raw_desc = row[mapping["description"]] if mapping["description"] in df.columns else "No Description"
+                description = str(raw_desc).strip() if pd.notna(raw_desc) else "No Description"
+                
+                # Amount parsing
+                raw_amt = row[mapping["amount"]]
+                amount = clean_amount(raw_amt)
+                if amount <= 0:
+                    continue # Skip row if amount is invalid
+                amount = round(amount, 2)
+                    
+                # Category parsing
+                raw_cat = row[mapping["category"]] if mapping["category"] in df.columns else "Uncategorized"
+                category = str(raw_cat).strip() if pd.notna(raw_cat) else "Uncategorized"
+                
+                season = get_season(parsed_date)
+                
+                db_expense = DBExpense(
+                    date=parsed_date,
+                    season=season,
+                    description=description,
+                    category=category,
+                    amount=amount
+                )
+                expenses_to_insert.append(db_expense)
+                imported_count += 1
+                
+            if expenses_to_insert:
+                for exp in expenses_to_insert:
+                    session.add(exp)
+                session.commit()
+                
+            return {
+                "message": f"Successfully imported {imported_count} expenses.",
+                "type": "spreadsheet",
+                "columns_detected": {k: str(v) for k, v in mapping.items() if v is not None}
+            }
+            
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
 

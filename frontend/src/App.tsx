@@ -108,6 +108,19 @@ function App() {
   const [chatLoading, setChatLoading] = useState(false)
   const chatBottomRef = useRef<HTMLDivElement>(null)
 
+  // OCR Ingestion confirmation states
+  const [ocrResult, setOcrResult] = useState<{
+    date: string
+    description: string
+    category: string
+    amount: number
+    bill_image_url: string
+  } | null>(null)
+  const [ocrDate, setOcrDate] = useState('')
+  const [ocrDesc, setOcrDesc] = useState('')
+  const [ocrCat, setOcrCat] = useState('')
+  const [ocrAmt, setOcrAmt] = useState('')
+
   // Upload States
   const [isDragging, setIsDragging] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -325,22 +338,40 @@ function App() {
     formData.append('file', uploadFile)
 
     if (isDemoMode) {
-      showToast('error', 'Cannot upload spreadsheets in sandbox mode. Please start the backend FastAPI server first!')
+      showToast('error', 'Cannot upload files in sandbox mode. Please start the backend FastAPI server first!')
       setUploading(false)
       return
     }
 
+    const ext = uploadFile.name.substring(uploadFile.name.lastIndexOf('.')).toLowerCase()
+    const isImage = ['.png', '.jpg', '.jpeg', '.webp'].includes(ext)
+
     try {
-      const res = await fetch(`${API_BASE}/expenses/upload`, {
+      const url = isImage 
+        ? `${API_BASE}/expenses/upload?save=false`
+        : `${API_BASE}/expenses/upload`
+        
+      const res = await fetch(url, {
         method: 'POST',
         body: formData
       })
       const data = await res.json()
+      
       if (res.ok) {
-        showToast('success', data.message || 'File uploaded successfully!')
-        setUploadFile(null)
-        setActiveTab('home')
-        fetchData()
+        if (isImage) {
+          showToast('success', 'OCR reading completed successfully!')
+          const parsed = data.expense
+          setOcrResult(parsed)
+          setOcrDate(parsed.date || '')
+          setOcrDesc(parsed.description || '')
+          setOcrCat(parsed.category || '')
+          setOcrAmt(String(parsed.amount || ''))
+        } else {
+          showToast('success', data.message || 'Spreadsheet uploaded successfully!')
+          setUploadFile(null)
+          setActiveTab('home')
+          fetchData()
+        }
       } else {
         showToast('error', data.detail || 'Upload processing failed')
       }
@@ -348,6 +379,38 @@ function App() {
       showToast('error', 'Server connection error during upload')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleOcrConfirm = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!ocrResult) return
+
+    try {
+      const res = await fetch(`${API_BASE}/expenses/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: ocrDate,
+          description: ocrDesc,
+          category: ocrCat,
+          amount: parseFloat(ocrAmt) || 0.0,
+          bill_image_url: ocrResult.bill_image_url
+        })
+      })
+      
+      if (res.ok) {
+        showToast('success', 'Expense confirmed and saved to database!')
+        setOcrResult(null)
+        setUploadFile(null)
+        setActiveTab('home')
+        fetchData()
+      } else {
+        const data = await res.json()
+        showToast('error', data.detail || 'Failed to save transaction')
+      }
+    } catch {
+      showToast('error', 'Could not reach server')
     }
   }
 
@@ -425,10 +488,10 @@ Or start the backend server to link actual spreadsheet parser results!`
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0]
       const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
-      if (['.csv', '.xlsx', '.xls'].includes(ext)) {
+      if (['.csv', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
         setUploadFile(file)
       } else {
-        showToast('error', 'Only CSV or Excel spreadsheets are supported')
+        showToast('error', 'Only CSV/Excel spreadsheets or PNG/JPG/WEBP images are supported')
       }
     }
   }
@@ -1286,87 +1349,197 @@ Or start the backend server to link actual spreadsheet parser results!`
 
           {/* TAB: INGEST/UPLOAD */}
           {activeTab === 'upload' && (
-            <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
-              <div className="card-title">Import Expense Spreadsheets</div>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '24px' }}>
-                Upload your tracked expenses spreadsheet. We accept **CSV** or **Excel (.xlsx, .xls)**.
-                Our parser automatically detects date, transaction description, category labels, and pricing columns.
-              </p>
-
-              <form onSubmit={handleFileUpload}>
-                <div
-                  className="upload-container"
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                  style={{
-                    borderColor: isDragging ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
-                    background: isDragging ? 'rgba(99, 102, 241, 0.05)' : 'rgba(255,255,255,0.01)'
-                  }}
-                  onClick={() => document.getElementById('file-upload-input')?.click()}
-                >
-                  <input
-                    type="file"
-                    id="file-upload-input"
-                    className="upload-file-input"
-                    accept=".csv, .xlsx, .xls"
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                        setUploadFile(e.target.files[0])
-                      }
-                    }}
-                  />
-                  <div className="upload-icon">
-                    <UploadCloud size={32} />
+            <div style={{ maxWidth: ocrResult ? '900px' : '600px', margin: '0 auto' }}>
+              {ocrResult ? (
+                /* OCR Confirmation Widget */
+                <div className="card" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '28px', padding: '32px' }}>
+                  {/* Left Column: Image Preview */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div className="card-title" style={{ fontSize: '16px', margin: 0 }}>Receipt / Bill Document</div>
+                    <div style={{
+                      borderRadius: '12px',
+                      overflow: 'hidden',
+                      border: '1px solid var(--border-color)',
+                      background: 'rgba(0,0,0,0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      aspectRatio: '3/4',
+                      position: 'relative'
+                    }}>
+                      <img
+                        src={`${API_BASE.replace('/api', '')}${ocrResult.bill_image_url}`}
+                        alt="Scanned Bill Document"
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      />
+                    </div>
                   </div>
-                  
-                  {uploadFile ? (
+
+                  {/* Right Column: Edit/Confirm Form */}
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                     <div>
-                      <div className="upload-title" style={{ color: 'var(--success)' }}>
-                        File Selected
+                      <div className="card-title" style={{ fontSize: '18px', fontWeight: '700', marginBottom: '8px', color: 'var(--success)' }}>
+                        Gemini OCR Extraction Results
                       </div>
-                      <div className="upload-sub" style={{ fontWeight: '600', color: '#fff' }}>
-                        {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
-                      </div>
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '20px' }}>
+                        We identified the following ledger properties from your document. Please verify or correct them before saving.
+                      </p>
+
+                      <form onSubmit={handleOcrConfirm} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div className="form-group">
+                          <label className="form-label">Transaction Date</label>
+                          <input
+                            type="date"
+                            className="form-input"
+                            required
+                            value={ocrDate}
+                            onChange={(e) => setOcrDate(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Merchant / Payee Name</label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            required
+                            value={ocrDesc}
+                            onChange={(e) => setOcrDesc(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Category</label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            required
+                            placeholder="e.g. Electricity, Gas, WiFi"
+                            value={ocrCat}
+                            onChange={(e) => setOcrCat(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Amount ($ USD equivalent)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            className="form-input"
+                            required
+                            value={ocrAmt}
+                            onChange={(e) => setOcrAmt(e.target.value)}
+                          />
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ flex: 1 }}
+                            onClick={() => {
+                              setOcrResult(null)
+                              setUploadFile(null)
+                            }}
+                          >
+                            Discard
+                          </button>
+                          <button type="submit" className="btn" style={{ flex: 2 }}>
+                            Confirm & Save
+                          </button>
+                        </div>
+                      </form>
                     </div>
-                  ) : (
-                    <div>
-                      <div className="upload-title">Drag & drop your file here</div>
-                      <div className="upload-sub">or click to browse from files</div>
-                    </div>
-                  )}
-                  
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    Supported formats: CSV, XLS, XLSX
-                  </span>
+                  </div>
                 </div>
+              ) : (
+                /* Upload File Form */
+                <div className="card">
+                  <div className="card-title">Import Expense Ledger or Bills</div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginBottom: '24px' }}>
+                    Upload your tracked expenses spreadsheet (CSV, Excel) or upload bill/receipt photos (PNG, JPG, WebP) for automated AI OCR parsing.
+                  </p>
 
-                {uploadFile && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setUploadFile(null)}
-                      disabled={uploading}
+                  <form onSubmit={handleFileUpload}>
+                    <div
+                      className="upload-container"
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      style={{
+                        borderColor: isDragging ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
+                        background: isDragging ? 'rgba(99, 102, 241, 0.05)' : 'rgba(255,255,255,0.01)'
+                      }}
+                      onClick={() => document.getElementById('file-upload-input')?.click()}
                     >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="btn"
-                      disabled={uploading}
-                    >
-                      {uploading ? (
-                        <>
-                          <Loader2 className="animate-spin" size={16} /> Parsing Ledger...
-                        </>
+                      <input
+                        type="file"
+                        id="file-upload-input"
+                        className="upload-file-input"
+                        accept=".csv, .xlsx, .xls, .png, .jpg, .jpeg, .webp"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            setUploadFile(e.target.files[0])
+                          }
+                        }}
+                      />
+                      <div className="upload-icon">
+                        <UploadCloud size={32} />
+                      </div>
+                      
+                      {uploadFile ? (
+                        <div>
+                          <div className="upload-title" style={{ color: 'var(--success)' }}>
+                            File Selected
+                          </div>
+                          <div className="upload-sub" style={{ fontWeight: '600', color: '#fff' }}>
+                            {uploadFile.name} ({(uploadFile.size / 1024).toFixed(1)} KB)
+                          </div>
+                        </div>
                       ) : (
-                        "Import Ledger"
+                        <div>
+                          <div className="upload-title">Drag & drop your file here</div>
+                          <div className="upload-sub">or click to browse from files</div>
+                        </div>
                       )}
-                    </button>
-                  </div>
-                )}
-              </form>
+                      
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        Supported formats: CSV, XLS, XLSX, PNG, JPG, WEBP
+                      </span>
+                    </div>
+
+                    {uploadFile && (
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setUploadFile(null)}
+                          disabled={uploading}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          className="btn"
+                          disabled={uploading}
+                        >
+                          {uploading ? (
+                            <>
+                              <Loader2 className="animate-spin" size={16} /> {
+                                ['.png', '.jpg', '.jpeg', '.webp'].includes(uploadFile.name.substring(uploadFile.name.lastIndexOf('.')).toLowerCase())
+                                  ? "Reading Bill with Gemini OCR..."
+                                  : "Parsing Ledger..."
+                              }
+                            </>
+                          ) : (
+                            "Import Document"
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </form>
+                </div>
+              )}
             </div>
           )}
         </main>

@@ -1,5 +1,9 @@
 {
   "hooks": {
+    "before_tool_call": {
+      "description": "Block plaintext secrets leaks and validate git commit conventional format",
+      "script": "/home/magesh/Magesh/AI/Google/FinAI/.agents/scripts/before_tool_call.py"
+    },
     "after_tool_use": {
       "description": "Auto-format, lint, and typecheck modified python files using ruff and mypy",
       "script": "/home/magesh/Magesh/AI/Google/FinAI/.agents/scripts/after_tool_use.py"

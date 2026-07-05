@@ -31,52 +31,45 @@ This specification outlines the architecture, data models, and features for **Fi
 
 ## 🗄️ Database Schema (PostgreSQL)
 
-To track aggregate transactions as well as itemized details (e.g., individual items from a grocery bill), we will use a two-table relational structure:
+To keep the system fast and straightforward, we will use a single flat table to track expenses. The primary currency is Euros (€), and it includes a `season` attribute for temporal analysis.
 
-### 1. `transactions`
-Represents a single purchase/receipt.
+### 1. `expenses`
+Represents a single expense item or utility bill.
 - `id` (UUID, Primary Key)
-- `date` (Date)
-- `description` (VARCHAR) - Merchant or vendor name (e.g., "Whole Foods")
-- `category` (VARCHAR) - Main category (e.g., "Groceries", "Utilities")
-- `total_amount` (DECIMAL) - Total cost of transaction
-- `receipt_image_url` (VARCHAR, Optional) - Path/URL to the uploaded receipt photo
+- `date` (Date) - Transaction or bill statement date
+- `season` (VARCHAR) - Derived season: "Winter" (Dec-Feb), "Spring" (Mar-May), "Summer" (Jun-Aug), "Autumn" (Sep-Nov)
+- `description` (VARCHAR) - Merchant, vendor, or utility provider (e.g., "Enel", "Fastweb", "Esselunga", "Conad")
+- `category` (VARCHAR) - Category of spend (e.g., "Rent", "WiFi", "Electricity", "Gas", "Groceries", "Public Transit", "Gelato/Dining Out", "Travel")
+- `amount` (DECIMAL) - Expense cost in Euros (€)
+- `bill_image_url` (VARCHAR, Optional) - Filepath to the uploaded receipt/bill photo
 - `created_at` (Timestamp)
-
-### 2. `transaction_items`
-Represents individual items within a transaction (crucial for itemized grocery receipts).
-- `id` (UUID, Primary Key)
-- `transaction_id` (UUID, Foreign Key referencing `transactions.id` ON DELETE CASCADE)
-- `name` (VARCHAR) - Item name (e.g., "Organic Apples")
-- `quantity` (INT) - Default: 1
-- `unit_price` (DECIMAL)
-- `total_price` (DECIMAL) - Calculated: quantity * unit_price
-- `category` (VARCHAR, Optional) - Subcategory if item level differs from transaction level
 
 ---
 
 ## ⚙️ Core Architecture & Features
 
 ### 1. Spreadsheet Data Migrator
-- A utility script to ingest the 6 years of historical spreadsheet data (`.csv` or `.xlsx`).
-- Cleans and standardizes categories, dates, and amounts using Pandas, maps them to the database schema, and loads them into PostgreSQL.
+- Ingests the 6 years of historical spreadsheet data (`.csv` or `.xlsx`).
+- Standardizes categories (WiFi, Gas, Electricity, Groceries, etc.), assigns the correct `season` based on the date, converts the amounts to Euros, and loads the data into PostgreSQL.
 
 ### 2. Automated Bill/Receipt Ingestion (OCR)
-- Upload receipt image via React UI.
-- Backend sends the image to the Gemini 2.5 Flash API with a structured prompt asking for a JSON response matching the database schema.
-- Extracts total amount, transaction date, merchant description, and itemized lists of items.
-- Saves the transaction and details to the PostgreSQL database.
+- Upload receipt or utility bill image via the React UI.
+- Backend sends the image to the Gemini 2.5 Flash API with a prompt to return a structured JSON object: description, category (Auto-detected, e.g. "Electricity" for Enel bills), amount, and date.
+- The backend automatically calculates the `season` from the date and saves the flat record to the database.
 
 ### 3. Frontend Views (React Client)
-- **Home (Overview)**: Summary metrics (total spent, average transaction, transaction count) and recent transactions list.
-- **Monthly**: Monthly charts, spending category breakdown, month-over-month comparisons.
-- **Yearly**: High-level annual trends, top categories per year, heatmaps of annual spending.
-- **Chatbot Section**: Standard chat panel linked to the backend AI agent.
+- **Home (Overview)**: Summary metrics (total spent, average monthly costs, recent bills/receipts).
+- **Monthly**: Monthly aggregates, category distributions, utilities tracking (WiFi vs. Gas vs. Electricity).
+- **Yearly**: Seasonal spending distribution comparison (e.g., heating utility spikes in Winter vs. vacation spending in Summer).
+- **Chatbot Section**: A terminal/chat bubble panel linked to the backend AI agent.
 
 ### 4. Natural Language Chatbot
-- When the user asks: *"How much did I spend on organic apples in 2025?"*
-- The backend gives Gemini the database schema and asks it to generate a safe SQL query matching the user's natural language question.
-- The backend executes the SQL query against PostgreSQL, retrieves the results, and hands them back to Gemini to synthesize a friendly, structured answer.
+- The user can ask questions in natural language:
+  - *"How much was my electricity bill last winter?"*
+  - *"List my expenses for gas in 2025."*
+  - *"What did I spend on transit during summer?"*
+- The backend gives Gemini the database schema and asks it to generate a safe SQL query matching the query.
+- The backend runs the query against the `expenses` table and hands the results back to Gemini to output a simple, markdown-styled response.
 
 ---
 
@@ -84,18 +77,18 @@ Represents individual items within a transaction (crucial for itemized grocery r
 
 1. **Phase 1: Database & Spreadsheet Migration**
    - Spin up PostgreSQL instance.
-   - Implement data migration scripts to import historical spreadsheets.
-   - Update backend routes to read/write transactions to PostgreSQL instead of in-memory JSON.
+   - Implement data migration scripts to import historical student spreadsheets (mapping dates to seasons, cleaning categories).
+   - Update backend routes to read/write expenses to PostgreSQL.
 
-2. **Phase 2: Receipt OCR Integration**
-   - Setup upload endpoints to accept images.
+2. **Phase 2: Receipt & Bill OCR Integration**
+   - Setup upload endpoints to accept bill images.
    - Write backend integration to call Gemini Vision API.
-   - Verify structured parsing of itemized receipts.
+   - Verify parsing of bills (WiFi, electricity, gas, groceries) into standard schema fields.
 
 3. **Phase 3: Conversational Database Agent**
-   - Build backend agent loop (Text-to-SQL).
+   - Build backend agent loop (Text-to-SQL for the flat `expenses` table).
    - Establish safe constraints (read-only execution context) for SQL queries.
 
 4. **Phase 4: Responsive Frontend Enhancement**
    - Refactor frontend tabs into Home, Monthly, Yearly, and Chatbot sections.
-   - Integrate the receipt image upload feature with loading spinners and confirmation panels.
+   - Add support for uploading images with automated category confirmations.

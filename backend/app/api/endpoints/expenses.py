@@ -245,6 +245,12 @@ def get_summary(session: Session = Depends(get_session)):
             "transaction_count": 0,
             "by_category": {},
             "by_month": {},
+            "by_season": {
+                "Winter": 0.0,
+                "Spring": 0.0,
+                "Summer": 0.0,
+                "Autumn": 0.0
+            },
         }
         
     total_spent = sum(e.amount for e in expenses)
@@ -255,6 +261,13 @@ def get_summary(session: Session = Depends(get_session)):
     by_category: dict[str, float] = {}
     # By Month
     by_month: dict[str, float] = {}
+    # By Season
+    by_season: dict[str, float] = {
+        "Winter": 0.0,
+        "Spring": 0.0,
+        "Summer": 0.0,
+        "Autumn": 0.0
+    }
     
     for e in expenses:
         # Category aggregation
@@ -271,11 +284,16 @@ def get_summary(session: Session = Depends(get_session)):
         except Exception:
             by_month["Unknown"] = by_month.get("Unknown", 0.0) + e.amount
             
+        # Season aggregation
+        season = e.season or "Unknown"
+        by_season[season] = by_season.get(season, 0.0) + e.amount
+            
     # Round all values
     total_spent = round(total_spent, 2)
     avg_tx = round(avg_tx, 2)
     by_category = {k: round(v, 2) for k, v in by_category.items()}
     by_month = {k: round(v, 2) for k, v in by_month.items()}
+    by_season = {k: round(v, 2) for k, v in by_season.items()}
     
     # Sort months chronologically
     sorted_months = dict(sorted(by_month.items()))
@@ -289,4 +307,5 @@ def get_summary(session: Session = Depends(get_session)):
         "transaction_count": count,
         "by_category": sorted_categories,
         "by_month": sorted_months,
+        "by_season": by_season,
     }

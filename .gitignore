@@ -20,7 +20,8 @@ dist-ssr/
 .vite/
 
 # Local databases and spreadsheets
-backend/data/expenses.json
+backend/data/
+*.db
 
 # Environment variables
 .env

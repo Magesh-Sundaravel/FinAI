@@ -15,7 +15,8 @@ import {
   CheckCircle2,
   X,
   Send,
-  HelpCircle
+  HelpCircle,
+  Calendar
 } from 'lucide-react'
 
 // Backend API Base URL
@@ -35,6 +36,7 @@ interface Summary {
   transaction_count: number
   by_category: Record<string, number>
   by_month: Record<string, number>
+  by_season?: Record<string, number>
 }
 
 // High quality mock data for demo fallback
@@ -66,13 +68,20 @@ const DEMO_SUMMARY: Summary = {
   by_month: {
     '2026-05': 656.00,
     '2026-06': 2473.25
+  },
+  by_season: {
+    'Winter': 0.0,
+    'Spring': 656.00,
+    'Summer': 2473.25,
+    'Autumn': 0.0
   }
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'expenses' | 'agent' | 'upload'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'home' | 'monthly' | 'yearly' | 'expenses' | 'agent' | 'upload'>('home')
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
+  const [selectedMonth, setSelectedMonth] = useState<string>('')
   
   // UI states
   const [loading, setLoading] = useState(true)
@@ -103,6 +112,62 @@ function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
+
+  // Helper to get season from date
+  const getSeasonFromDate = (dateStr: string) => {
+    const month = parseInt(dateStr.substring(5, 7))
+    if (isNaN(month)) return 'Unknown'
+    if (month === 12 || month === 1 || month === 2) return 'Winter'
+    if (month >= 3 && month <= 5) return 'Spring'
+    if (month >= 6 && month <= 8) return 'Summer'
+    return 'Autumn'
+  }
+  
+  // Calculate seasonal spends dynamically if missing
+  const getSeasonalData = () => {
+    if (summary?.by_season) return summary.by_season
+    
+    const seasonal: Record<string, number> = {
+      'Winter': 0,
+      'Spring': 0,
+      'Summer': 0,
+      'Autumn': 0
+    }
+    expenses.forEach(e => {
+      const season = getSeasonFromDate(e.date)
+      if (season in seasonal) {
+        seasonal[season] += e.amount
+      }
+    })
+    return seasonal
+  }
+
+  // Get dominant category for season
+  const getDominantCategoryForSeason = (seasonName: string) => {
+    const seasonExpenses = expenses.filter(e => getSeasonFromDate(e.date) === seasonName)
+    if (seasonExpenses.length === 0) return 'None'
+    const catMap: Record<string, number> = {}
+    seasonExpenses.forEach(e => {
+      catMap[e.category] = (catMap[e.category] || 0) + e.amount
+    })
+    return Object.keys(catMap).reduce((a, b) => catMap[a] > catMap[b] ? a : b, 'None')
+  }
+
+  // Get all unique months in data
+  const getAvailableMonths = () => {
+    if (expenses.length === 0) return []
+    const months = Array.from(new Set(expenses.map(e => e.date.substring(0, 7))))
+    return months.sort().reverse()
+  }
+
+  // Auto set selected month
+  useEffect(() => {
+    const months = getAvailableMonths()
+    if (months.length > 0 && !selectedMonth) {
+      setSelectedMonth(months[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expenses])
 
   // Load data
   useEffect(() => {
@@ -223,7 +288,7 @@ function App() {
       } else {
         showToast('error', 'Failed to save transaction')
       }
-    } catch (err) {
+    } catch {
       showToast('error', 'Could not reach server')
     }
   }
@@ -246,7 +311,7 @@ function App() {
       } else {
         showToast('error', 'Failed to clear database')
       }
-    } catch (err) {
+    } catch {
       showToast('error', 'Server error')
     }
   }
@@ -274,12 +339,12 @@ function App() {
       if (res.ok) {
         showToast('success', data.message || 'File uploaded successfully!')
         setUploadFile(null)
-        setActiveTab('dashboard')
+        setActiveTab('home')
         fetchData()
       } else {
         showToast('error', data.detail || 'Upload processing failed')
       }
-    } catch (err) {
+    } catch {
       showToast('error', 'Server connection error during upload')
     } finally {
       setUploading(false)
@@ -308,7 +373,7 @@ function App() {
       } else {
         throw new Error("Chat error")
       }
-    } catch (err) {
+    } catch {
       // Local fallback parsing for sandbox mode
       setTimeout(() => {
         let reply = "Sorry, I had trouble reaching my AI core. Check your server connection."
@@ -377,6 +442,31 @@ Or start the backend server to link actual spreadsheet parser results!`
   })
 
   const uniqueCategories = Array.from(new Set(expenses.map(e => e.category)))
+
+  // Selected Month Calculations
+  const selectedMonthExpenses = expenses.filter(e => e.date.substring(0, 7) === selectedMonth)
+  const selectedMonthTotal = selectedMonthExpenses.reduce((sum, e) => sum + e.amount, 0)
+  const selectedMonthCount = selectedMonthExpenses.length
+  const selectedMonthAvg = selectedMonthCount > 0 ? selectedMonthTotal / selectedMonthCount : 0
+  
+  const selectedMonthCats: Record<string, number> = {}
+  selectedMonthExpenses.forEach(e => {
+    selectedMonthCats[e.category] = (selectedMonthCats[e.category] || 0) + e.amount
+  })
+  
+  const utilityCategories = ['rent', 'wifi', 'electricity', 'gas']
+  const utilityTotals: Record<string, number> = {
+    'rent': 0,
+    'wifi': 0,
+    'electricity': 0,
+    'gas': 0
+  }
+  selectedMonthExpenses.forEach(e => {
+    const catLower = e.category.toLowerCase()
+    if (utilityCategories.includes(catLower)) {
+      utilityTotals[catLower] += e.amount
+    }
+  })
 
   // SVG Chart Helper Data Calculations
   const renderSvgChart = () => {
@@ -478,6 +568,94 @@ Or start the backend server to link actual spreadsheet parser results!`
     )
   }
 
+  const renderSeasonalSvgChart = () => {
+    const seasonalData = getSeasonalData()
+    const seasons = ['Winter', 'Spring', 'Summer', 'Autumn']
+    const values = seasons.map(s => seasonalData[s] || 0)
+    const maxVal = Math.max(...values, 100)
+    
+    const chartHeight = 220
+    const chartWidth = 500
+    const paddingLeft = 60
+    const paddingBottom = 30
+    const barWidth = 60
+    
+    const colors = {
+      'Winter': 'var(--winter-color, #38bdf8)',
+      'Spring': 'var(--spring-color, #4ade80)',
+      'Summer': 'var(--summer-color, #fbbf24)',
+      'Autumn': 'var(--autumn-color, #fb923c)'
+    }
+    
+    return (
+      <svg className="chart-svg" viewBox={`0 0 ${chartWidth} ${chartHeight + paddingBottom}`}>
+        {/* Y Axis Gridlines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio, index) => {
+          const y = chartHeight * (1 - ratio)
+          const val = Math.round(maxVal * ratio)
+          return (
+            <g key={index}>
+              <line x1={paddingLeft} y1={y} x2={chartWidth} y2={y} className="chart-grid-line" />
+              <text x={paddingLeft - 10} y={y + 4} textAnchor="end" className="chart-text">
+                ${val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}
+              </text>
+            </g>
+          )
+        })}
+
+        {/* X Axis labels & Bars */}
+        {seasons.map((season, index) => {
+          const val = seasonalData[season] || 0
+          const ratio = val / maxVal
+          const barHeight = chartHeight * ratio
+          
+          const sectionWidth = (chartWidth - paddingLeft) / seasons.length
+          const x = paddingLeft + (index * sectionWidth) + (sectionWidth - barWidth) / 2
+          const y = chartHeight - barHeight
+
+          return (
+            <g key={index}>
+              {/* Bar */}
+              <rect
+                x={x}
+                y={y}
+                width={barWidth}
+                height={barHeight}
+                fill={colors[season as keyof typeof colors]}
+                rx="6"
+                style={{ transition: 'all 0.3s ease' }}
+              >
+                <title>{`${season}: $${val.toLocaleString()}`}</title>
+              </rect>
+              {/* Label */}
+              <text
+                x={x + barWidth / 2}
+                y={chartHeight + 18}
+                textAnchor="middle"
+                className="chart-text"
+              >
+                {season}
+              </text>
+              {/* Value on bar */}
+              {barHeight > 25 && (
+                <text
+                  x={x + barWidth / 2}
+                  y={y + 15}
+                  textAnchor="middle"
+                  fill="#ffffff"
+                  fontSize="9px"
+                  fontWeight="600"
+                >
+                  ${val >= 1000 ? (val/1000).toFixed(0)+'k' : Math.round(val)}
+                </text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+    )
+  }
+
   return (
     <>
       {/* Header */}
@@ -510,10 +688,22 @@ Or start the backend server to link actual spreadsheet parser results!`
 
         <nav className="nav-tabs">
           <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('home')}
+            className={`tab-btn ${activeTab === 'home' ? 'active' : ''}`}
           >
-            <LayoutDashboard /> Dashboard
+            <LayoutDashboard /> Home
+          </button>
+          <button
+            onClick={() => setActiveTab('monthly')}
+            className={`tab-btn ${activeTab === 'monthly' ? 'active' : ''}`}
+          >
+            <Calendar /> Monthly
+          </button>
+          <button
+            onClick={() => setActiveTab('yearly')}
+            className={`tab-btn ${activeTab === 'yearly' ? 'active' : ''}`}
+          >
+            <TrendingUp /> Yearly / Seasonal
           </button>
           <button
             onClick={() => setActiveTab('expenses')}
@@ -545,7 +735,7 @@ Or start the backend server to link actual spreadsheet parser results!`
       ) : (
         <main>
           {/* TAB: DASHBOARD */}
-          {activeTab === 'dashboard' && (
+          {activeTab === 'home' && (
             <div>
               {/* Metric Cards Grid */}
               <div className="dashboard-grid">
@@ -655,6 +845,295 @@ Or start the backend server to link actual spreadsheet parser results!`
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: MONTHLY TRACKER */}
+          {activeTab === 'monthly' && (
+            <div>
+              {/* Month Selection Control */}
+              <div className="card" style={{ marginBottom: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+                  <div>
+                    <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '4px' }}>Monthly Spend Analysis</h3>
+                    <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Drill down into detailed monthly category aggregates and utility expenses.</p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <label style={{ fontSize: '14px', fontWeight: '500', color: 'var(--text-secondary)' }}>Select Month:</label>
+                    <select
+                      className="filter-select"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      style={{ minWidth: '150px' }}
+                    >
+                      {getAvailableMonths().map((m, i) => (
+                        <option key={i} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {selectedMonth ? (
+                <>
+                  {/* Selected Month Stats Grid */}
+                  <div className="dashboard-grid" style={{ marginBottom: '24px' }}>
+                    <div className="metric-card success">
+                      <div className="metric-header">
+                        <span>Month's Total Spend</span>
+                        <div className="metric-icon">
+                          <DollarSign size={18} />
+                        </div>
+                      </div>
+                      <div className="metric-value">
+                        ${selectedMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                      <div className="metric-sub">Total spent in {selectedMonth}</div>
+                    </div>
+
+                    <div className="metric-card primary">
+                      <div className="metric-header">
+                        <span>Average Monthly Expense</span>
+                        <div className="metric-icon">
+                          <TrendingUp size={18} />
+                        </div>
+                      </div>
+                      <div className="metric-value">
+                        ${selectedMonthAvg.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                      <div className="metric-sub">Per-transaction average</div>
+                    </div>
+
+                    <div className="metric-card warning">
+                      <div className="metric-header">
+                        <span>Month's Transactions</span>
+                        <div className="metric-icon">
+                          <ReceiptText size={18} />
+                        </div>
+                      </div>
+                      <div className="metric-value">
+                        {selectedMonthCount}
+                      </div>
+                      <div className="metric-sub">Total items in selected month</div>
+                    </div>
+                  </div>
+
+                  {/* Monthly Category & Utility Breakdowns */}
+                  <div className="visuals-section" style={{ marginBottom: '24px' }}>
+                    {/* Category List */}
+                    <div className="card">
+                      <div className="card-title">
+                        <span>Category Breakdown ({selectedMonth})</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Shares</span>
+                      </div>
+                      <div className="category-list">
+                        {Object.keys(selectedMonthCats).length > 0 ? (
+                          Object.keys(selectedMonthCats).map((category, idx) => {
+                            const amt = selectedMonthCats[category]
+                            const pct = Math.round((amt / (selectedMonthTotal || 1)) * 100)
+                            
+                            return (
+                              <div className="category-row" key={idx}>
+                                <div className="category-info">
+                                  <span className="category-name">
+                                    <span className="category-dot" style={{ backgroundColor: `hsl(${(idx * 65) % 360}, 75%, 60%)` }} />
+                                    {category}
+                                  </span>
+                                  <span className="category-amount">${amt.toLocaleString()} ({pct}%)</span>
+                                </div>
+                                <div className="category-bar-bg">
+                                  <div
+                                    className="category-bar-fill"
+                                    style={{
+                                      width: `${pct}%`,
+                                      background: `linear-gradient(90deg, hsl(${(idx * 65) % 360}, 75%, 50%), var(--success))`
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            )
+                          })
+                        ) : (
+                          <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--text-muted)', paddingTop: '60px' }}>
+                            No category data for this month.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Utility Invoices Tracker */}
+                    <div className="card">
+                      <div className="card-title">
+                        <span>Utility & Core Expense Tracker</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Core</span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
+                        {[
+                          { name: 'Rent', key: 'rent', desc: 'Monthly Housing Bill', color: '#6366f1' },
+                          { name: 'Electricity', key: 'electricity', desc: 'Power Statement (Enel, etc.)', color: '#fbbf24' },
+                          { name: 'Gas', key: 'gas', desc: 'Heating/Gas Invoices', color: '#fb923c' },
+                          { name: 'WiFi', key: 'wifi', desc: 'Internet/WiFi Bill (Fastweb, etc.)', color: '#38bdf8' }
+                        ].map((util, i) => {
+                          const amt = utilityTotals[util.key] || 0
+                          return (
+                            <div key={i} style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '12px 16px',
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: '8px'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <div style={{
+                                  width: '8px',
+                                  height: '8px',
+                                  borderRadius: '50%',
+                                  backgroundColor: util.color
+                                }} />
+                                <div>
+                                  <div style={{ fontWeight: '600', fontSize: '14px' }}>{util.name}</div>
+                                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{util.desc}</div>
+                                </div>
+                              </div>
+                              <div style={{ fontWeight: '700', fontSize: '16px', color: amt > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                                ${amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Monthly Transactions List */}
+                  <div className="card">
+                    <div className="card-title" style={{ marginBottom: '16px' }}>
+                      <span>Ledger Items for {selectedMonth}</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{selectedMonthCount} items</span>
+                    </div>
+                    <div className="table-container">
+                      <table className="expenses-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Description</th>
+                            <th>Category</th>
+                            <th style={{ textAlign: 'right' }}>Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedMonthExpenses.map((expense) => (
+                            <tr key={expense.id}>
+                              <td style={{ color: 'var(--text-secondary)' }}>{expense.date}</td>
+                              <td style={{ fontWeight: '500' }}>{expense.description}</td>
+                              <td>
+                                <span className="tag tag-category">
+                                  {expense.category}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: 'right' }} className="amount-text negative">
+                                ${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="card" style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                  No months available. Please ingest database expenses.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB: YEARLY / SEASONAL ANALYTICS */}
+          {activeTab === 'yearly' && (
+            <div>
+              {/* Seasonal spends bar chart & breakdowns */}
+              <div className="visuals-section" style={{ marginBottom: '24px' }}>
+                <div className="card">
+                  <div className="card-title">
+                    <span>Seasonal Spending Distribution</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Breakdown</span>
+                  </div>
+                  <div className="chart-container">
+                    {renderSeasonalSvgChart()}
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card-title">
+                    <span>Seasonal Breakdown Grids</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Comparison</span>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
+                    {[
+                      { name: 'Winter', range: 'Dec - Feb', color: 'var(--winter-color, #38bdf8)' },
+                      { name: 'Spring', range: 'Mar - May', color: 'var(--spring-color, #4ade80)' },
+                      { name: 'Summer', range: 'Jun - Aug', color: 'var(--summer-color, #fbbf24)' },
+                      { name: 'Autumn', range: 'Sep - Nov', color: 'var(--autumn-color, #fb923c)' }
+                    ].map((season, idx) => {
+                      const total = getSeasonalData()[season.name] || 0
+                      const count = expenses.filter(e => getSeasonFromDate(e.date) === season.name).length
+                      const domCat = getDominantCategoryForSeason(season.name)
+                      
+                      return (
+                        <div key={idx} style={{
+                          padding: '14px',
+                          background: 'rgba(255,255,255,0.01)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '10px',
+                          borderLeft: `4px solid ${season.color}`
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                            <div>
+                              <div style={{ fontWeight: '700', fontSize: '15px' }}>{season.name}</div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{season.range}</div>
+                            </div>
+                            <div style={{ fontWeight: '700', fontSize: '15px', color: total > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                              ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <div>Transactions: <strong style={{ color: '#fff' }}>{count}</strong></div>
+                            <div>Dominant: <strong style={{ color: '#fff' }}>{domCat}</strong></div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Dynamic Analytics Insights */}
+              <div className="card">
+                <div className="card-title" style={{ marginBottom: '16px' }}>
+                  <span>Seasonal Spending Analysis & Insights</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
+                  <p>
+                    🌱 <strong>Spring (Mar - May)</strong>: Spends are typically dominated by infrastructure renewals and spring activities.
+                    {getSeasonalData()['Spring'] > 0 ? ` You spent $${getSeasonalData()['Spring'].toLocaleString()} this season.` : ' Currently no data tracked for Spring.'}
+                  </p>
+                  <p>
+                    ☀️ <strong>Summer (Jun - Aug)</strong>: Often spikes due to travel, gelato excursions, and vacations.
+                    {getSeasonalData()['Summer'] > 0 ? ` You spent $${getSeasonalData()['Summer'].toLocaleString()} this season.` : ' Currently no data tracked for Summer.'}
+                  </p>
+                  <p>
+                    🍂 <strong>Autumn (Sep - Nov)</strong>: Seasonal transitions generally register standard utility operations.
+                    {getSeasonalData()['Autumn'] > 0 ? ` You spent $${getSeasonalData()['Autumn'].toLocaleString()} this season.` : ' Currently no data tracked for Autumn.'}
+                  </p>
+                  <p>
+                    ❄️ <strong>Winter (Dec - Feb)</strong>: Usually experiences budget spikes on heating utilities (Electricity/Gas) and holiday shopping.
+                    {getSeasonalData()['Winter'] > 0 ? ` You spent $${getSeasonalData()['Winter'].toLocaleString()} this season.` : ' Currently no data tracked for Winter.'}
+                  </p>
                 </div>
               </div>
             </div>

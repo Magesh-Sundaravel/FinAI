@@ -110,11 +110,11 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
                 )
                 cat_tx = len([e for e in expenses if e.category.lower() == cat.lower()])
                 return (
-                    f"You spent a total of **${cat_spent:,.2d}** on **{cat}** across {cat_tx} transaction(s). "
-                    f"This accounts for {((cat_spent / total_spent) * 100):.1f}% of your total spending (${total_spent:,.2d})."
+                    f"You spent a total of **€{cat_spent:,.2f}** on **{cat}** across {cat_tx} transaction(s). "
+                    f"This accounts for {((cat_spent / total_spent) * 100):.1f}% of your total spending (€{total_spent:,.2f})."
                 )
         return (
-            f"You have tracked a total of **${total_spent:,.2d}** across **{num_tx}** transactions. "
+            f"You have tracked a total of **€{total_spent:,.2f}** across **{num_tx}** transactions. "
             f"Your spending is spread across {len(categories)} categories: {', '.join(categories)}."
         )
 
@@ -125,11 +125,11 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
             cat_spent = sum(
                 e.amount for e in expenses if e.category.lower() == cat.lower()
             )
-            cat_summaries.append(f"- **{cat}**: ${cat_spent:,.2d}")
+            cat_summaries.append(f"- **{cat}**: €{cat_spent:,.2f}")
         cat_text = "\n".join(cat_summaries)
         return (
             f"You have expenses in **{len(categories)}** categories:\n\n{cat_text}\n\n"
-            f"The total spending is **${total_spent:,.2d}**."
+            f"The total spending is **€{total_spent:,.2f}**."
         )
 
     # 3. Ask about highest expense
@@ -138,7 +138,7 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
     ):
         highest = max(expenses, key=lambda x: x.amount)
         return (
-            f"Your single highest expense was **${highest.amount:,.2d}** on **{highest.date}** "
+            f"Your single highest expense was **€{highest.amount:,.2f}** on **{highest.date}** "
             f"for **'{highest.description}'** (Category: {highest.category})."
         )
 
@@ -157,7 +157,7 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
         total_found = sum(e.amount for e in found_tx)
         tx_list_str = "\n".join(
             [
-                f"- {e.date}: **{e.description}** - ${e.amount:,.2d} ({e.category})"
+                f"- {e.date}: **{e.description}** - €{e.amount:,.2f} ({e.category})"
                 for e in found_tx[:5]
             ]
         )
@@ -168,12 +168,12 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
         )
         return (
             f"I found {len(found_tx)} transaction(s) matching your search:\n\n{tx_list_str}{more_str}\n\n"
-            f"Total spent on these transactions: **${total_found:,.2d}**."
+            f"Total spent on these transactions: **€{total_found:,.2f}**."
         )
 
     # 5. Default greeting / general explanation
     return (
-        f"I'm your Finance AI Agent! I currently have **{num_tx}** transactions loaded totaling **${total_spent:,.2d}**.\n\n"
+        f"I'm your Finance AI Agent! I currently have **{num_tx}** transactions loaded totaling **€{total_spent:,.2f}**.\n\n"
         f"Since the `GEMINI_API_KEY` is not set, I am running in local analysis mode. You can ask me questions like:\n"
         f"- *'How much did I spend in total?'*\n"
         f"- *'What are my spending categories?'*\n"

@@ -10,7 +10,7 @@ import {
   Loader2,
   TrendingUp,
   Coins,
-  DollarSign,
+  Euro,
   AlertCircle,
   CheckCircle2,
   X,
@@ -88,6 +88,7 @@ function App() {
   const [isDemoMode, setIsDemoMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
+  const [chartYearFilter, setChartYearFilter] = useState<string>('last12')
   const [showAddModal, setShowAddModal] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
   
@@ -445,14 +446,14 @@ function App() {
         const count = expenses.length
         
         if (lower.includes("total") || lower.includes("how much")) {
-          reply = `In this sandbox, your total spending is **$${total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}** across **${count}** transaction(s).`
+          reply = `In this sandbox, your total spending is **€${total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}** across **${count}** transaction(s).`
         } else if (lower.includes("category") || lower.includes("categories")) {
-          const cats = summary ? Object.keys(summary.by_category).map(c => `- **${c}**: $${summary.by_category[c].toLocaleString()}`).join('\n') : '';
+          const cats = summary ? Object.keys(summary.by_category).map(c => `- **${c}**: €${summary.by_category[c].toLocaleString()}`).join('\n') : '';
           reply = `Here is your sandbox category spending:\n\n${cats || 'No categories found.'}`
         } else if (lower.includes("highest") || lower.includes("max")) {
           if (expenses.length > 0) {
             const highest = expenses.reduce((prev, current) => (prev.amount > current.amount) ? prev : current)
-            reply = `Your single largest expense in the sandbox is **$${highest.amount.toLocaleString()}** for **${highest.description}** (${highest.category}) on **${highest.date}**.`
+            reply = `Your single largest expense in the sandbox is **€${highest.amount.toLocaleString()}** for **${highest.description}** (${highest.category}) on **${highest.date}**.`
           } else {
             reply = "You don't have any sandbox expenses loaded yet!"
           }
@@ -541,19 +542,43 @@ Or start the backend server to link actual spreadsheet parser results!`
       )
     }
 
-    const months = Object.keys(summary.by_month).sort()
+    const allMonths = Object.keys(summary.by_month).sort()
+    
+    // Apply filter
+    let months = [...allMonths]
+    if (chartYearFilter === 'last12') {
+      months = months.slice(-12)
+    } else if (chartYearFilter === 'last24') {
+      months = months.slice(-24)
+    } else if (chartYearFilter !== 'all') {
+      months = months.filter(m => m.startsWith(chartYearFilter))
+    }
+
+    if (months.length === 0) {
+      return (
+        <div style={{ margin: 'auto', padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+          No data available for the selected range.
+        </div>
+      )
+    }
+
     const values = months.map(m => summary.by_month[m])
     const maxVal = Math.max(...values, 100)
     
     // Grid values
     const chartHeight = 220
-    const chartWidth = 500
     const paddingLeft = 60
-    const paddingBottom = 30
-    const barWidth = Math.min(45, (chartWidth - paddingLeft) / months.length - 15)
+    const paddingBottom = 35
+    const colWidth = 55
+    const chartWidth = Math.max(500, paddingLeft + months.length * colWidth)
+    const barWidth = 26
     
     return (
-      <svg className="chart-svg" viewBox={`0 0 ${chartWidth} ${chartHeight + paddingBottom}`}>
+      <svg 
+        className="chart-svg" 
+        viewBox={`0 0 ${chartWidth} ${chartHeight + paddingBottom}`}
+        style={{ width: `${chartWidth}px`, height: '100%', minWidth: `${chartWidth}px` }}
+      >
         <defs>
           <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--primary)" />
@@ -573,7 +598,7 @@ Or start the backend server to link actual spreadsheet parser results!`
             <g key={index}>
               <line x1={paddingLeft} y1={y} x2={chartWidth} y2={y} className="chart-grid-line" />
               <text x={paddingLeft - 10} y={y + 4} textAnchor="end" className="chart-text">
-                ${val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}
+                €{val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}
               </text>
             </g>
           )
@@ -585,9 +610,7 @@ Or start the backend server to link actual spreadsheet parser results!`
           const ratio = val / maxVal
           const barHeight = chartHeight * ratio
           
-          // spacing
-          const sectionWidth = (chartWidth - paddingLeft) / months.length
-          const x = paddingLeft + (index * sectionWidth) + (sectionWidth - barWidth) / 2
+          const x = paddingLeft + index * colWidth + (colWidth - barWidth) / 2
           const y = chartHeight - barHeight
 
           return (
@@ -600,7 +623,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                 height={barHeight}
                 className="chart-bar"
               >
-                <title>{`${month}: $${val.toLocaleString()}`}</title>
+                <title>{`${month}: €${val.toLocaleString()}`}</title>
               </rect>
               {/* Label */}
               <text
@@ -612,18 +635,16 @@ Or start the backend server to link actual spreadsheet parser results!`
                 {month}
               </text>
               {/* Value on bar */}
-              {barHeight > 25 && (
-                <text
-                  x={x + barWidth / 2}
-                  y={y + 15}
-                  textAnchor="middle"
-                  fill="#ffffff"
-                  fontSize="9px"
-                  fontWeight="600"
-                >
-                  ${val >= 1000 ? (val/1000).toFixed(0)+'k' : Math.round(val)}
-                </text>
-              )}
+              <text
+                x={x + barWidth / 2}
+                y={y - 6}
+                textAnchor="middle"
+                fill="var(--text-secondary)"
+                fontSize="9px"
+                fontWeight="600"
+              >
+                €{val >= 1000 ? (val/1000).toFixed(0)+'k' : Math.round(val)}
+              </text>
             </g>
           )
         })}
@@ -660,7 +681,7 @@ Or start the backend server to link actual spreadsheet parser results!`
             <g key={index}>
               <line x1={paddingLeft} y1={y} x2={chartWidth} y2={y} className="chart-grid-line" />
               <text x={paddingLeft - 10} y={y + 4} textAnchor="end" className="chart-text">
-                ${val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}
+                €{val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}
               </text>
             </g>
           )
@@ -688,7 +709,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                 rx="6"
                 style={{ transition: 'all 0.3s ease' }}
               >
-                <title>{`${season}: $${val.toLocaleString()}`}</title>
+                <title>{`${season}: €${val.toLocaleString()}`}</title>
               </rect>
               {/* Label */}
               <text
@@ -700,24 +721,25 @@ Or start the backend server to link actual spreadsheet parser results!`
                 {season}
               </text>
               {/* Value on bar */}
-              {barHeight > 25 && (
-                <text
-                  x={x + barWidth / 2}
-                  y={y + 15}
-                  textAnchor="middle"
-                  fill="#ffffff"
-                  fontSize="9px"
-                  fontWeight="600"
-                >
-                  ${val >= 1000 ? (val/1000).toFixed(0)+'k' : Math.round(val)}
-                </text>
-              )}
+              <text
+                x={x + barWidth / 2}
+                y={y - 6}
+                textAnchor="middle"
+                fill="var(--text-secondary)"
+                fontSize="9px"
+                fontWeight="600"
+              >
+                €{val >= 1000 ? (val/1000).toFixed(0)+'k' : Math.round(val)}
+              </text>
             </g>
           )
         })}
       </svg>
     )
   }
+
+  const allMonthsList = summary && summary.by_month ? Object.keys(summary.by_month).sort() : []
+  const availableYears = Array.from(new Set(allMonthsList.map(m => m.split('-')[0]))).sort().reverse()
 
   return (
     <>
@@ -806,26 +828,13 @@ Or start the backend server to link actual spreadsheet parser results!`
                   <div className="metric-header">
                     <span>Total Tracked Spend</span>
                     <div className="metric-icon">
-                      <DollarSign size={18} />
+                      <Euro size={18} />
                     </div>
                   </div>
                   <div className="metric-value">
-                    ${(summary?.total_spent || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    €{(summary?.total_spent || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                   <div className="metric-sub">Aggregated budget total</div>
-                </div>
-
-                <div className="metric-card primary">
-                  <div className="metric-header">
-                    <span>Average Expense</span>
-                    <div className="metric-icon">
-                      <TrendingUp size={18} />
-                    </div>
-                  </div>
-                  <div className="metric-value">
-                    ${(summary?.average_transaction || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </div>
-                  <div className="metric-sub">Average transaction size</div>
                 </div>
 
                 <div className="metric-card warning">
@@ -859,9 +868,24 @@ Or start the backend server to link actual spreadsheet parser results!`
               <div className="visuals-section">
                 {/* Monthly SVG Chart */}
                 <div className="card">
-                  <div className="card-title">
+                  <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span>Monthly Spends Analysis</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Trend</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Range:</span>
+                      <select
+                        className="filter-select"
+                        value={chartYearFilter}
+                        onChange={(e) => setChartYearFilter(e.target.value)}
+                        style={{ padding: '4px 8px', fontSize: '12px', minWidth: '120px', height: '28px' }}
+                      >
+                        <option value="last12">Last 12 Months</option>
+                        <option value="last24">Last 24 Months</option>
+                        {availableYears.map(year => (
+                          <option key={year} value={year}>{year}</option>
+                        ))}
+                        <option value="all">All Months</option>
+                      </select>
+                    </div>
                   </div>
                   <div className="chart-container">
                     {renderSvgChart()}
@@ -888,7 +912,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                                 <span className="category-dot" style={{ backgroundColor: `hsl(${(idx * 60) % 360}, 70%, 60%)` }} />
                                 {category}
                               </span>
-                              <span className="category-amount">${amt.toLocaleString()} ({pct}%)</span>
+                              <span className="category-amount">€{amt.toLocaleString()} ({pct}%)</span>
                             </div>
                             <div className="category-bar-bg">
                               <div
@@ -947,11 +971,11 @@ Or start the backend server to link actual spreadsheet parser results!`
                       <div className="metric-header">
                         <span>Month's Total Spend</span>
                         <div className="metric-icon">
-                          <DollarSign size={18} />
+                          <Euro size={18} />
                         </div>
                       </div>
                       <div className="metric-value">
-                        ${selectedMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        €{selectedMonthTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                       <div className="metric-sub">Total spent in {selectedMonth}</div>
                     </div>
@@ -964,7 +988,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                         </div>
                       </div>
                       <div className="metric-value">
-                        ${selectedMonthAvg.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        €{selectedMonthAvg.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                       <div className="metric-sub">Per-transaction average</div>
                     </div>
@@ -1004,7 +1028,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                                     <span className="category-dot" style={{ backgroundColor: `hsl(${(idx * 65) % 360}, 75%, 60%)` }} />
                                     {category}
                                   </span>
-                                  <span className="category-amount">${amt.toLocaleString()} ({pct}%)</span>
+                                  <span className="category-amount">€{amt.toLocaleString()} ({pct}%)</span>
                                 </div>
                                 <div className="category-bar-bg">
                                   <div
@@ -1063,7 +1087,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                                 </div>
                               </div>
                               <div style={{ fontWeight: '700', fontSize: '16px', color: amt > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                                ${amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                €{amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </div>
                             </div>
                           )
@@ -1099,7 +1123,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                                 </span>
                               </td>
                               <td style={{ textAlign: 'right' }} className="amount-text negative">
-                                ${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                €{expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </td>
                             </tr>
                           ))}
@@ -1161,7 +1185,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{season.range}</div>
                             </div>
                             <div style={{ fontWeight: '700', fontSize: '15px', color: total > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                              ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              €{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </div>
                           </div>
                           <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1183,19 +1207,19 @@ Or start the backend server to link actual spreadsheet parser results!`
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
                   <p>
                     🌱 <strong>Spring (Mar - May)</strong>: Spends are typically dominated by infrastructure renewals and spring activities.
-                    {getSeasonalData()['Spring'] > 0 ? ` You spent $${getSeasonalData()['Spring'].toLocaleString()} this season.` : ' Currently no data tracked for Spring.'}
+                    {getSeasonalData()['Spring'] > 0 ? ` You spent €${getSeasonalData()['Spring'].toLocaleString()} this season.` : ' Currently no data tracked for Spring.'}
                   </p>
                   <p>
                     ☀️ <strong>Summer (Jun - Aug)</strong>: Often spikes due to travel, gelato excursions, and vacations.
-                    {getSeasonalData()['Summer'] > 0 ? ` You spent $${getSeasonalData()['Summer'].toLocaleString()} this season.` : ' Currently no data tracked for Summer.'}
+                    {getSeasonalData()['Summer'] > 0 ? ` You spent €${getSeasonalData()['Summer'].toLocaleString()} this season.` : ' Currently no data tracked for Summer.'}
                   </p>
                   <p>
                     🍂 <strong>Autumn (Sep - Nov)</strong>: Seasonal transitions generally register standard utility operations.
-                    {getSeasonalData()['Autumn'] > 0 ? ` You spent $${getSeasonalData()['Autumn'].toLocaleString()} this season.` : ' Currently no data tracked for Autumn.'}
+                    {getSeasonalData()['Autumn'] > 0 ? ` You spent €${getSeasonalData()['Autumn'].toLocaleString()} this season.` : ' Currently no data tracked for Autumn.'}
                   </p>
                   <p>
                     ❄️ <strong>Winter (Dec - Feb)</strong>: Usually experiences budget spikes on heating utilities (Electricity/Gas) and holiday shopping.
-                    {getSeasonalData()['Winter'] > 0 ? ` You spent $${getSeasonalData()['Winter'].toLocaleString()} this season.` : ' Currently no data tracked for Winter.'}
+                    {getSeasonalData()['Winter'] > 0 ? ` You spent €${getSeasonalData()['Winter'].toLocaleString()} this season.` : ' Currently no data tracked for Winter.'}
                   </p>
                 </div>
               </div>
@@ -1263,7 +1287,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                             </span>
                           </td>
                           <td style={{ textAlign: 'right' }} className="amount-text negative">
-                            ${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            €{expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                         </tr>
                       ))}
@@ -1421,7 +1445,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                         </div>
 
                         <div className="form-group">
-                          <label className="form-label">Amount ($ USD equivalent)</label>
+                          <label className="form-label">Amount (€ EUR equivalent)</label>
                           <input
                             type="number"
                             step="0.01"
@@ -1592,7 +1616,7 @@ Or start the backend server to link actual spreadsheet parser results!`
               </div>
 
               <div className="form-group">
-                <label className="form-label">Amount ($ USD)</label>
+                <label className="form-label">Amount (€ EUR)</label>
                 <input
                   type="number"
                   step="0.01"

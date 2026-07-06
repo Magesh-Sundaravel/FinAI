@@ -11,7 +11,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 from google import genai
 from google.genai import types
-from app.db import engine, get_session
+from app.db import engine, get_session, get_readonly_session
 from app.models import Expense, User
 from app.auth import get_current_user
 
@@ -193,7 +193,7 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
 def chat_with_agent(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_readonly_session)
 ):
     api_key = os.environ.get("GEMINI_API_KEY")
 

@@ -1,12 +1,37 @@
 # Finance AI Agents 🪙🤖
 
-A modern, high-performance monorepo application designed to automate, parse, and analyze years of personal expenses using intelligent agents. Built with a FastAPI backend and a React (TypeScript) + Vite frontend.
+A professional, high-performance monorepo application designed to automate parsing, categorizing, and analyzing personal expenses using intelligent agents. Built with a **FastAPI backend** and a **React (TypeScript) + Vite frontend**, the application is fully optimized for production deployment on **Google Cloud Run** and **Google Cloud SQL (PostgreSQL)**.
 
-## 🛠️ Technology Stack
+---
 
-- **Backend**: FastAPI, Python 3.12+, managed via **`uv`** (extremely fast package resolver & environment manager) and Pandas/OpenPyXL for spreadsheet ingestion.
-- **Frontend**: React (TypeScript), Vite.js, Vanilla CSS styling (premium dark-theme, custom glassmorphism components), and Lucide React Icons.
-- **AI Core**: Heuristic keyword analyzer with optional integration with the **Gemini 2.5 Flash** API for advanced budget reasoning and trends analysis.
+## ✨ Core Features
+
+* 📊 **Multi-Year Expense Ledger**: Drag & drop `.csv`, `.xlsx`, or `.xls` bank/credit card statements. The system automatically maps column fields, parses transactions, and normalizes categories.
+* 📷 **AI Ingestion (Gemini OCR)**: Upload a receipt or utility bill image. The system streams the file to Google Cloud Storage (GCS) and invokes the Gemini 2.5 Flash Vision API to extract descriptions, categories, amounts, dates, and seasonal tags.
+* 💬 **Secured Text-to-SQL Chatbot**: Query your database in natural language (e.g. *"Show my groceries spending last winter"*). The backend translates the text to PostgreSQL-compatible SQL using Gemini and executes it.
+* 🛡️ **Dual-Database Security**: Chatbot queries run under a restricted, read-only database session to prevent SQL injection or destructive operations (`DROP`, `DELETE`, etc.), while the primary application runs under a standard read-write owner role.
+* 🎨 **Premium Dark-Theme Dashboard**: Zero-dependency, responsive SVG charts, glassmorphism UI components, and smooth animations.
+
+---
+
+## 🏛️ Production Architecture
+
+```mermaid
+graph TD
+    Client[Web Browser / React Client] -- "HTTPS (port 8080)" --> CloudRun[Google Cloud Run FastAPI Container]
+    
+    subgraph FastAPI Container
+        Static[FastAPI Static Files Middleware]
+        API[FastAPI Endpoints /api]
+    end
+    
+    API -- "SELECT Queries (Read-Only User)" --> ReadOnlyDB[(Cloud SQL Postgres - Read-Only Role)]
+    API -- "Migrations & Writes (Owner User)" --> OwnerDB[(Cloud SQL Postgres - Owner Role)]
+    API -- "Extract Text" --> Gemini[Gemini 2.5 Flash API]
+    API -- "Upload Bill/Receipt Image" --> GCS["Google Cloud Storage Bucket (gs://finai-receipts)"]
+
+    Client -- "Direct HTTPS Media Load" --> GCS
+```
 
 ---
 
@@ -14,79 +39,97 @@ A modern, high-performance monorepo application designed to automate, parse, and
 
 ```text
 FinAI/
+├── .github/workflows/        # CI/CD Pipeline Configuration
+│   └── deploy.yml            # Google Cloud Run deployment workflow
 ├── backend/                  # FastAPI Application
 │   ├── app/
-│   │   ├── api/
-│   │   │   ├── endpoints/
-│   │   │   │   ├── agent.py      # AI Agent reasoning routes
-│   │   │   │   └── expenses.py   # Spreadsheet parser & ledger endpoints
-│   │   └── main.py           # API server entrypoint & CORS setup
+│   │   ├── api/endpoints/
+│   │   │   ├── agent.py      # AI Agent & Text-to-SQL endpoints
+│   │   │   └── expenses.py   # OCR ingestion, ledger parsing & CRUD
+│   │   ├── main.py           # API server entrypoint & CORS setup
+│   │   ├── db.py             # Database engine & session declarations
+│   │   └── models.py         # SQLAlchemy / SQLModel schema tables
 │   ├── pyproject.toml        # uv python dependencies configuration
-│   └── README.md
-├── frontend/                 # React + Vite Client
-│   ├── src/
-│   │   ├── App.tsx           # React Dashboard interface logic & SVG Charts
-│   │   └── index.css         # UI Styling system
-│   ├── package.json          # Node dependencies
-│   └── README.md
-├── .gitignore                # Root gitignore rules
-└── README.md                 # Project guide (this file)
+│   └── Dockerfile            # Multi-stage production container configuration
+└── frontend/                 # React + Vite Client
+    ├── src/
+    │   ├── App.tsx           # React Dashboard interface logic & SVG Charts
+    │   └── index.css         # UI Styling system
+    └── package.json          # Node dependencies
 ```
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Prerequisite Checklist
-Make sure you have the following installed:
-- Git
-- Python 3.12+ (or run `uv python install 3.12` to let uv manage it)
-- [uv](https://github.com/astral-sh/uv) (Python package installer)
-- Node.js (v20+ recommended) & npm
+### 1. Local Development Sandbox (SQLite)
+FastAPI defaults to a local SQLite database when no external database URL is configured.
+
+#### Backend
+Ensure you have [uv](https://github.com/astral-sh/uv) installed:
+```bash
+cd backend
+export GEMINI_API_KEY="your-gemini-api-key"
+uv run uvicorn app.main:app --port 8000 --reload
+```
+Interactive docs will be active at: `http://localhost:8000/docs`.
+
+#### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open `http://localhost:5173`. The client automatically hooks into `http://localhost:8000/api`.
 
 ---
 
-### 2. Launching the Backend API
-1. Navigate into the backend directory:
-   ```bash
-   cd backend
-   ```
-2. *(Optional)* If you'd like to enable full LLM conversational analysis, export your Gemini API key:
-   ```bash
-   export GEMINI_API_KEY="your-api-key-here"
-   ```
-3. Start the FastAPI server (uv will automatically create a virtual environment, sync packages, and run the server):
-   ```bash
-   uv run uvicorn app.main:app --port 8000 --reload
-   ```
-   - The API will be active at: `http://localhost:8000`
-   - Interactive Swagger API docs: `http://localhost:8000/docs`
+## 📦 Production Deployment (Google Cloud Run)
+
+The production configuration uses a unified Docker container serving both React built assets and the FastAPI server.
+
+### 1. Build and Run Container Locally
+To test the production container locally:
+```bash
+docker build -t finai-app -f backend/Dockerfile .
+docker run -p 8080:8080 \
+  -e DATABASE_URL="postgresql://user:password@localhost:5432/dbname" \
+  -e GEMINI_API_KEY="your-api-key" \
+  finai-app
+```
+
+### 2. CI/CD Deployment
+Our [.github/workflows/deploy.yml](.github/workflows/deploy.yml) workflow automatically deploys to Google Cloud Run when commits are pushed to the `main` branch or a release tag is pushed. 
+
+Ensure the following GitHub Secrets are configured in your repository settings:
+* `GCP_SA_KEY`: Service account credentials JSON.
+* `GCP_PROJECT_ID`: Your GCP project ID.
+* `GCP_INSTANCE_CONN_NAME`: Cloud SQL instance connection name.
+* `DATABASE_URL`: Cloud SQL owner connection string.
+* `READONLY_DATABASE_URL`: Cloud SQL read-only agent connection string.
+* `GEMINI_API_KEY`: Google Gemini API Access Token.
+* `GCS_BUCKET_NAME`: Google Cloud Storage bucket name for receipt images.
 
 ---
 
-### 3. Launching the Frontend App
-1. Open a new terminal window and navigate into the frontend folder:
-   ```bash
-   cd frontend
-   ```
-2. Install the node packages:
-   ```bash
-   npm install
-   ```
-3. Run the hot-reloading development server:
-   ```bash
-   npm run dev
-   ```
-   - Open your browser to the local URL displayed (typically `http://localhost:5173`).
+## 🏷️ GitHub Releases & Best Practices
 
----
+To maintain a professional release lifecycle for version tags:
 
-## ✨ Features Checklist
-1. **Spreadsheet Ingest System**: Drag & drop your `.csv`, `.xlsx`, or `.xls` expense sheets. The backend parses data using Pandas, auto-detects fields representing dates, vendor descriptions, category labels, and amounts, then saves it to a persistent local ledger.
-2. **Interactive Ledger**: Search, filter by category, clear database files, or add manual transactions via the UI modal.
-3. **Advanced SVG Dashboard**: Zero-dependency, responsive, and custom-styled SVG bar charts and category spending progress sheets.
-4. **Finance AI Agent Chat**: Talk directly to your financial advisor bot. Ask questions like:
-   - *"How much did I spend in total?"*
-   - *"Show spending by category"*
-   - *"What is my highest expense?"*
-   - *"Show me expenses related to Amazon"*
+### 1. Create a Release Tag
+Ensure your `main` branch is up to date:
+```bash
+git checkout main
+git pull origin main
+```
+Tag the version and push it:
+```bash
+git tag -a v0.0.1 -m "Release v0.0.1: Initial production release with unified container, GCS integration, Cloud SQL Postgres migration, and dual DB connection roles."
+git push origin v0.0.1
+```
+
+### 2. Drafting the Release in GitHub
+Go to **Releases -> Draft a new release** on GitHub:
+* Choose the tag: `v0.0.1`.
+* Title: `v0.0.1 - Production Release`.
+* Body description: Include highlights of the features, DB role security mechanisms, and GCS integrations.

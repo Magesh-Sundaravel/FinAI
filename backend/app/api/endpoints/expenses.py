@@ -43,6 +43,34 @@ def get_season(date_val) -> str:
     else:
         return "Autumn"
 
+def upload_to_gcs(file_bytes: bytes, filename: str, content_type: str) -> Optional[str]:
+    """
+    Upload file bytes to Google Cloud Storage and return the public URL.
+    Returns None if GCS_BUCKET_NAME is not set.
+    """
+    bucket_name = os.environ.get("GCS_BUCKET_NAME")
+    if not bucket_name:
+        return None
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        
+        # Keep GCS path structured
+        unique_filename = f"uploads/{uuid.uuid4()}_{filename}"
+        blob = bucket.blob(unique_filename)
+        blob.upload_from_string(file_bytes, content_type=content_type)
+        
+        # Attempt to make public (if default IAM does not make it public)
+        try:
+            blob.make_public()
+        except Exception:
+            pass
+        return blob.public_url
+    except Exception as e:
+        print(f"Failed to upload to GCS: {e}")
+        return None
+
 def load_expenses() -> List[DBExpense]:
     """
     Load all expenses from the database for compatibility/fallback.
@@ -189,15 +217,18 @@ def upload_file(
             if not file_bytes:
                 raise HTTPException(status_code=400, detail="The uploaded image is empty.")
                 
-            # Create uploads directory if it doesn't exist
-            uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
+            # Upload to GCS if bucket is configured
+            gcs_url = upload_to_gcs(file_bytes, file.filename or "receipt.jpg", file.content_type or "image/jpeg")
+            unique_filename = ""
             
-            # Save file to disk with unique name
-            unique_filename = f"{uuid.uuid4()}{ext}"
-            file_path = os.path.join(uploads_dir, unique_filename)
-            with open(file_path, "wb") as f:
-                f.write(file_bytes)
+            # Fallback to local storage if GCS is not configured
+            if not gcs_url:
+                uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
+                os.makedirs(uploads_dir, exist_ok=True)
+                unique_filename = f"{uuid.uuid4()}{ext}"
+                file_path = os.path.join(uploads_dir, unique_filename)
+                with open(file_path, "wb") as f:
+                    f.write(file_bytes)
                 
             # Invoke google-genai Client
             client = genai.Client(api_key=api_key)
@@ -248,7 +279,7 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                 description=description,
                 category=category,
                 amount=amount,
-                bill_image_url=f"/uploads/{unique_filename}",
+                bill_image_url=gcs_url if gcs_url else f"/uploads/{unique_filename}",
                 user_id=current_user.id
             )
             

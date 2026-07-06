@@ -30,6 +30,14 @@ if DATABASE_URL.startswith("sqlite"):
 
 engine = create_engine(DATABASE_URL, echo=True, connect_args=connect_args)
 
+# Read-only engine for chatbot Text-to-SQL operations
+READONLY_DATABASE_URL = os.environ.get("READONLY_DATABASE_URL") or DATABASE_URL
+readonly_connect_args = {}
+if READONLY_DATABASE_URL.startswith("sqlite"):
+    readonly_connect_args = {"check_same_thread": False}
+
+readonly_engine = create_engine(READONLY_DATABASE_URL, echo=True, connect_args=readonly_connect_args)
+
 def init_db():
     # Import models here to make sure they are registered on SQLModel.metadata before creation
     from app.models import Expense, User  # noqa: F401
@@ -61,4 +69,8 @@ def init_db():
 
 def get_session():
     with Session(engine) as session:
+        yield session
+
+def get_readonly_session():
+    with Session(readonly_engine) as session:
         yield session

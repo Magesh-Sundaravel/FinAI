@@ -224,7 +224,14 @@ def process_excel():
             # Skip summary/Total rows
             cat_str = str(cat_val).strip().lower() if pd.notna(cat_val) else ""
             desc_str = str(desc_val).strip().lower() if pd.notna(desc_val) else ""
-            if cat_str == 'total' or desc_str == 'total':
+            is_total = (
+                cat_str == 'total' or 
+                desc_str == 'total' or
+                'total' in cat_str or
+                'total' in desc_str or
+                (pd.isna(date_val) and pd.isna(desc_val) and pd.isna(cat_val) and pd.notna(cost_val))
+            )
+            if is_total:
                 skipped_totals += 1
                 continue
                 

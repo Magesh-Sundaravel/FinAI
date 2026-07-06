@@ -17,7 +17,8 @@ import {
   Send,
   HelpCircle,
   Calendar,
-  User
+  User,
+  LogOut
 } from 'lucide-react'
 
 // Backend API Base URL
@@ -1647,6 +1648,35 @@ Or start the backend server to link actual spreadsheet parser results!`
                     <strong>Note:</strong> You are currently in local sandbox demo mode. To see your actual Google-authenticated profile and secure database, run the app in Google Cloud.
                   </div>
                 )}
+
+                <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'center' }}>
+                  <a
+                    href="/_gcp_iap/clear_login_cookie"
+                    className="btn"
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#f87171',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      padding: '10px 24px',
+                      borderRadius: '8px',
+                      fontWeight: '600',
+                      textDecoration: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      transition: 'all 0.2s ease',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)';
+                    }}
+                  >
+                    <LogOut size={16} /> Log Out
+                  </a>
+                </div>
               </div>
             </div>
           )}

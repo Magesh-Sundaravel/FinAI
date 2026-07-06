@@ -22,6 +22,8 @@ dist-ssr/
 # Local databases and spreadsheets
 backend/data/
 *.db
+*.xlsx
+.~lock.*
 
 # Environment variables
 .env

@@ -1,9 +1,11 @@
 import os
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
+
 from app.api.endpoints import expenses, agent
 from app.db import init_db
 

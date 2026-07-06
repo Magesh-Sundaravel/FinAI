@@ -1,4 +1,17 @@
+# ruff: noqa: E402
 import os
+from pathlib import Path
+
+# Load .env file if it exists in the backend root
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ[key.strip()] = val.strip().strip('"').strip("'")
+
 from sqlmodel import SQLModel, create_engine, Session
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -19,7 +32,7 @@ engine = create_engine(DATABASE_URL, echo=True, connect_args=connect_args)
 
 def init_db():
     # Import models here to make sure they are registered on SQLModel.metadata before creation
-    from app.models import Expense
+    from app.models import Expense  # noqa: F401
     SQLModel.metadata.create_all(engine)
 
 def get_session():

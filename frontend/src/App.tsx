@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 
 // Backend API Base URL
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = window.location.origin.includes('localhost:5173') ? 'http://localhost:8000/api' : window.location.origin + '/api'
 
 interface Expense {
   id: string

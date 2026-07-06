@@ -1,11 +1,24 @@
 import os
+from pathlib import Path
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
+
 from app.api.endpoints import expenses, agent
 from app.db import init_db
+
+# Load .env file if it exists in the backend root
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ[key.strip()] = val.strip().strip('"').strip("'")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

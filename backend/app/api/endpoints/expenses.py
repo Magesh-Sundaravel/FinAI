@@ -11,7 +11,8 @@ from sqlalchemy import func
 from google import genai
 from google.genai import types
 from app.db import engine, get_session
-from app.models import Expense as DBExpense
+from app.models import Expense as DBExpense, User
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -24,7 +25,7 @@ class ExpenseCreate(BaseModel):
 
 class ExpenseExtraction(BaseModel):
     description: str = Field(description="The merchant, vendor, or utility provider name (e.g. Enel, Conad, Esselunga, Fastweb, etc.).")
-    category: str = Field(description="The category of spend: Choose the most appropriate from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.")
+    category: str = Field(description="The category of spend: Choose the most appropriate from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out'. If none of these match, select another appropriate short category name.")
     amount: float = Field(description="The total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.")
     date: str = Field(description="The transaction or invoice date in YYYY-MM-DD format.")
 
@@ -41,6 +42,34 @@ def get_season(date_val) -> str:
         return "Summer"
     else:
         return "Autumn"
+
+def upload_to_gcs(file_bytes: bytes, filename: str, content_type: str) -> Optional[str]:
+    """
+    Upload file bytes to Google Cloud Storage and return the public URL.
+    Returns None if GCS_BUCKET_NAME is not set.
+    """
+    bucket_name = os.environ.get("GCS_BUCKET_NAME")
+    if not bucket_name:
+        return None
+    try:
+        from google.cloud import storage
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        
+        # Keep GCS path structured
+        unique_filename = f"uploads/{uuid.uuid4()}_{filename}"
+        blob = bucket.blob(unique_filename)
+        blob.upload_from_string(file_bytes, content_type=content_type)
+        
+        # Attempt to make public (if default IAM does not make it public)
+        try:
+            blob.make_public()
+        except Exception:
+            pass
+        return blob.public_url
+    except Exception as e:
+        print(f"Failed to upload to GCS: {e}")
+        return None
 
 def load_expenses() -> List[DBExpense]:
     """
@@ -109,9 +138,10 @@ def detect_columns(columns):
 @router.get("/", response_model=List[DBExpense])
 def get_expenses(
     category: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    statement = select(DBExpense)
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
     if category:
         statement = statement.where(func.lower(DBExpense.category) == category.lower())
     statement = statement.order_by(DBExpense.date.desc())  # type: ignore
@@ -121,6 +151,7 @@ def get_expenses(
 @router.post("/", response_model=DBExpense)
 def create_expense(
     expense_in: ExpenseCreate,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     # Validate/parse date format
@@ -138,7 +169,8 @@ def create_expense(
         description=expense_in.description,
         category=expense_in.category or "Uncategorized",
         amount=round(expense_in.amount, 2),
-        bill_image_url=expense_in.bill_image_url
+        bill_image_url=expense_in.bill_image_url,
+        user_id=current_user.id
     )
     session.add(expense)
     session.commit()
@@ -146,8 +178,11 @@ def create_expense(
     return expense
 
 @router.delete("/clear")
-def clear_expenses(session: Session = Depends(get_session)):
-    session.exec(delete(DBExpense))
+def clear_expenses(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    session.exec(delete(DBExpense).where(DBExpense.user_id == current_user.id))
     session.commit()
     return {"message": "All expenses cleared successfully"}
 
@@ -155,6 +190,7 @@ def clear_expenses(session: Session = Depends(get_session)):
 def upload_file(
     file: UploadFile = File(...),
     save: bool = True,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     filename = file.filename or ""
@@ -181,15 +217,18 @@ def upload_file(
             if not file_bytes:
                 raise HTTPException(status_code=400, detail="The uploaded image is empty.")
                 
-            # Create uploads directory if it doesn't exist
-            uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
+            # Upload to GCS if bucket is configured
+            gcs_url = upload_to_gcs(file_bytes, file.filename or "receipt.jpg", file.content_type or "image/jpeg")
+            unique_filename = ""
             
-            # Save file to disk with unique name
-            unique_filename = f"{uuid.uuid4()}{ext}"
-            file_path = os.path.join(uploads_dir, unique_filename)
-            with open(file_path, "wb") as f:
-                f.write(file_bytes)
+            # Fallback to local storage if GCS is not configured
+            if not gcs_url:
+                uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
+                os.makedirs(uploads_dir, exist_ok=True)
+                unique_filename = f"{uuid.uuid4()}{ext}"
+                file_path = os.path.join(uploads_dir, unique_filename)
+                with open(file_path, "wb") as f:
+                    f.write(file_bytes)
                 
             # Invoke google-genai Client
             client = genai.Client(api_key=api_key)
@@ -202,7 +241,7 @@ def upload_file(
             prompt = """
 Analyze the uploaded bill or receipt image. Extract the following information:
 1. Merchant/Vendor/Utility provider name (e.g. Enel, Conad, Esselunga, Fastweb).
-2. Category of spend: Choose the most appropriate category from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.
+2. Category of spend: Choose the most appropriate category from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out'. If none of these match, select another appropriate short category name.
 3. Total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.
 4. Transaction or invoice date in YYYY-MM-DD format.
 """
@@ -240,7 +279,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                 description=description,
                 category=category,
                 amount=amount,
-                bill_image_url=f"/uploads/{unique_filename}"
+                bill_image_url=gcs_url if gcs_url else f"/uploads/{unique_filename}",
+                user_id=current_user.id
             )
             
             if save:
@@ -287,6 +327,27 @@ Analyze the uploaded bill or receipt image. Extract the following information:
             for _, row in df.iterrows():
                 # Date parsing
                 raw_date = row[mapping["date"]]
+                
+                # Check for total/summary rows first
+                desc_col = mapping["description"]
+                cat_col = mapping["category"]
+                desc_val = row[desc_col] if desc_col in df.columns else None
+                cat_val = row[cat_col] if cat_col in df.columns else None
+                cost_val = row[mapping["amount"]]
+                
+                cat_str = str(cat_val).strip().lower() if pd.notna(cat_val) else ""
+                desc_str = str(desc_val).strip().lower() if pd.notna(desc_val) else ""
+                
+                is_total = (
+                    cat_str == 'total' or 
+                    desc_str == 'total' or
+                    'total' in cat_str or
+                    'total' in desc_str or
+                    (pd.isna(raw_date) and pd.isna(desc_val) and pd.isna(cat_val) and pd.notna(cost_val))
+                )
+                if is_total:
+                    continue
+                    
                 if pd.isna(raw_date):
                     continue
                     
@@ -320,7 +381,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                     season=season,
                     description=description,
                     category=category,
-                    amount=amount
+                    amount=amount,
+                    user_id=current_user.id
                 )
                 expenses_to_insert.append(db_expense)
                 imported_count += 1
@@ -342,8 +404,11 @@ Analyze the uploaded bill or receipt image. Extract the following information:
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
 
 @router.get("/summary")
-def get_summary(session: Session = Depends(get_session)):
-    statement = select(DBExpense)
+def get_summary(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
     expenses = session.exec(statement).all()
     
     if not expenses:
@@ -416,4 +481,23 @@ def get_summary(session: Session = Depends(get_session)):
         "by_category": sorted_categories,
         "by_month": sorted_months,
         "by_season": by_season,
+    }
+
+@router.get("/profile")
+def get_profile(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    # Calculate stats for profile page
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
+    expenses = session.exec(statement).all()
+    
+    total_spent = sum(e.amount for e in expenses)
+    count = len(expenses)
+    
+    return {
+        "email": current_user.email,
+        "total_spent": round(total_spent, 2),
+        "transaction_count": count,
+        "created_at": current_user.created_at.strftime("%Y-%m-%d") if current_user.created_at else None
     }

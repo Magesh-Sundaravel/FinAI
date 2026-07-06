@@ -16,11 +16,13 @@ import {
   X,
   Send,
   HelpCircle,
-  Calendar
+  Calendar,
+  User,
+  LogOut
 } from 'lucide-react'
 
 // Backend API Base URL
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = window.location.origin.includes('localhost:5173') ? 'http://localhost:8000/api' : window.location.origin + '/api'
 
 interface Expense {
   id: string
@@ -78,10 +80,11 @@ const DEMO_SUMMARY: Summary = {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'monthly' | 'yearly' | 'expenses' | 'agent' | 'upload'>('home')
+  const [activeTab, setActiveTab] = useState<'home' | 'monthly' | 'yearly' | 'expenses' | 'agent' | 'upload' | 'profile'>('home')
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [selectedMonth, setSelectedMonth] = useState<string>('')
+  const [profile, setProfile] = useState<{ email: string; total_spent: number; transaction_count: number; created_at: string | null } | null>(null)
   
   // UI states
   const [loading, setLoading] = useState(true)
@@ -201,10 +204,11 @@ function App() {
   const fetchData = async () => {
     setLoading(true)
     try {
-      // Fetch summary and expenses in parallel
-      const [expRes, sumRes] = await Promise.all([
+      // Fetch summary, expenses, and profile in parallel
+      const [expRes, sumRes, profRes] = await Promise.all([
         fetch(`${API_BASE}/expenses/`),
-        fetch(`${API_BASE}/expenses/summary`)
+        fetch(`${API_BASE}/expenses/summary`),
+        fetch(`${API_BASE}/expenses/profile`)
       ])
 
       if (expRes.ok && sumRes.ok) {
@@ -224,10 +228,21 @@ function App() {
       } else {
         throw new Error("Failed to fetch data")
       }
+
+      if (profRes.ok) {
+        const profData = await profRes.json()
+        setProfile(profData)
+      }
     } catch (err) {
       console.warn("Backend not reachable. Falling back to Demo Mode.", err)
       setExpenses(DEMO_EXPENSES)
       setSummary(DEMO_SUMMARY)
+      setProfile({
+        email: "demo-user@gmail.com",
+        total_spent: DEMO_SUMMARY.total_spent,
+        transaction_count: DEMO_SUMMARY.transaction_count,
+        created_at: "2026-07-06"
+      })
       setIsDemoMode(true)
       showToast('info', 'Running in local sandbox mode. Start the FastAPI server to save your actual data.')
     } finally {
@@ -807,6 +822,12 @@ Or start the backend server to link actual spreadsheet parser results!`
             className={`tab-btn ${activeTab === 'upload' ? 'active' : ''}`}
           >
             <UploadCloud /> Ingest
+          </button>
+          <button
+            onClick={() => setActiveTab('profile')}
+            className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
+          >
+            <User /> Profile
           </button>
         </nav>
       </header>
@@ -1564,6 +1585,99 @@ Or start the backend server to link actual spreadsheet parser results!`
                   </form>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB: PROFILE */}
+          {activeTab === 'profile' && profile && (
+            <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+              <div className="card" style={{ padding: '32px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '28px' }}>
+                  <div style={{
+                    width: '64px',
+                    height: '64px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    fontSize: '24px',
+                    fontWeight: 'bold',
+                    boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)'
+                  }}>
+                    {profile.email.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 4px 0', color: '#fff' }}>User Profile</h2>
+                    <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '14px' }}>{profile.email}</p>
+                  </div>
+                </div>
+
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '24px 0' }} />
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '28px' }}>
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '16px', borderRadius: '12px' }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '12px', fontWeight: '600', textTransform: 'uppercase', marginBottom: '4px' }}>Total Spend</div>
+                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--primary)' }}>€{profile.total_spent.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  </div>
+                  
+                  <div className="card" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '16px', borderRadius: '12px' }}>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '12px', fontWeight: '600', textTransform: 'uppercase', marginBottom: '4px' }}>Transactions</div>
+                    <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fff' }}>{profile.transaction_count}</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Account Status</span>
+                    <span style={{ color: 'var(--success)', fontWeight: '600' }}>Active (Verified via IAP)</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Member Since</span>
+                    <span style={{ color: '#fff' }}>{profile.created_at || 'Recently'}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Environment</span>
+                    <span style={{ color: '#fff' }}>{isDemoMode ? 'Sandbox (Demo)' : 'Google Cloud Production'}</span>
+                  </div>
+                </div>
+
+                {isDemoMode && (
+                  <div style={{ marginTop: '28px', padding: '12px', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid var(--warning)', borderRadius: '8px', color: 'var(--warning)', fontSize: '13px', lineHeight: '1.5' }}>
+                    <strong>Note:</strong> You are currently in local sandbox demo mode. To see your actual Google-authenticated profile and secure database, run the app in Google Cloud.
+                  </div>
+                )}
+
+                <div style={{ marginTop: '32px', display: 'flex', justifyContent: 'center' }}>
+                  <a
+                    href="/_gcp_iap/clear_login_cookie"
+                    className="btn"
+                    style={{
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#f87171',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                      padding: '10px 24px',
+                      borderRadius: '8px',
+                      fontWeight: '600',
+                      textDecoration: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      transition: 'all 0.2s ease',
+                      cursor: 'pointer'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(239, 68, 68, 0.12)';
+                    }}
+                  >
+                    <LogOut size={16} /> Log Out
+                  </a>
+                </div>
+              </div>
             </div>
           )}
         </main>

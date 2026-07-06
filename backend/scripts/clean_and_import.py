@@ -142,13 +142,9 @@ def clean_category(cat_val) -> str:
     if cat_lower in ('groom', 'groom up', 'grooming', 'haircut', 'facewash'):
         return "Grooming"
         
-    # 10. Public Transit
-    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi'):
-        return "Public Transit"
-        
-    # 11. Travel
-    if cat_lower in ('travel', 'flight', 'hotel'):
-        return "Travel"
+    # 10. Travel & Transit
+    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi', 'travel', 'flight', 'hotel'):
+        return "Travel & Transit"
         
     # 12. Entertainment & Leisure
     if cat_lower in ('club', 'movie', 'party'):
@@ -224,7 +220,14 @@ def process_excel():
             # Skip summary/Total rows
             cat_str = str(cat_val).strip().lower() if pd.notna(cat_val) else ""
             desc_str = str(desc_val).strip().lower() if pd.notna(desc_val) else ""
-            if cat_str == 'total' or desc_str == 'total':
+            is_total = (
+                cat_str == 'total' or 
+                desc_str == 'total' or
+                'total' in cat_str or
+                'total' in desc_str or
+                (pd.isna(date_val) and pd.isna(desc_val) and pd.isna(cat_val) and pd.notna(cost_val))
+            )
+            if is_total:
                 skipped_totals += 1
                 continue
                 

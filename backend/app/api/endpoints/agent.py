@@ -3,16 +3,17 @@ import json
 import re
 import urllib.request
 import urllib.error
+import uuid
 from typing import Optional, List
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from sqlmodel import Session
+from sqlmodel import Session, select
 from google import genai
 from google.genai import types
-from app.db import engine, get_session
-from app.api.endpoints.expenses import load_expenses
-from app.models import Expense
+from app.db import engine, get_session, get_readonly_session
+from app.models import Expense, User
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -33,9 +34,9 @@ class AgentDecision(BaseModel):
     explanation: Optional[str] = Field(default=None, description="Provide a conversational response here if requires_db is false.")
 
 
-def execute_read_only_query(query_str: str, session: Session) -> list:
+def execute_read_only_query(query_str: str, user_id: uuid.UUID, session: Session) -> list:
     """
-    Safely execute a generated SQL query ensuring it is read-only.
+    Safely execute a generated SQL query ensuring it is read-only and restricted to the user.
     """
     forbidden = ["insert", "update", "delete", "drop", "alter", "truncate", "replace", "create"]
     query_lower = query_str.lower()
@@ -45,6 +46,11 @@ def execute_read_only_query(query_str: str, session: Session) -> list:
             
     if not query_lower.strip().startswith("select"):
         raise ValueError("Security policy violation: only SELECT queries are allowed")
+        
+    # Enforce user isolation check
+    user_id_str = str(user_id)
+    if user_id_str not in query_str:
+        raise ValueError("Security policy violation: query must filter by your specific user_id")
         
     if "limit" not in query_lower:
         query_str = query_str.strip().rstrip(';')
@@ -186,7 +192,8 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_agent(
     req: ChatRequest,
-    session: Session = Depends(get_session)
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_readonly_session)
 ):
     api_key = os.environ.get("GEMINI_API_KEY")
 
@@ -204,9 +211,10 @@ Schema:
 - date: DATE (The date of the transaction/expense, format: YYYY-MM-DD)
 - season: VARCHAR (Derived season: 'Winter', 'Spring', 'Summer', 'Autumn')
 - description: VARCHAR (The merchant or vendor name)
-- category: VARCHAR (The category of spend, e.g. 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel')
+- category: VARCHAR (The category of spend, e.g. 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out')
 - amount: FLOAT (The transaction amount in Euros)
 - bill_image_url: VARCHAR (Optional filepath to receipt/bill photo)
+- user_id: UUID (Foreign key to reference the specific user)
 - created_at: TIMESTAMP
 
 Guidelines:
@@ -217,8 +225,10 @@ Guidelines:
      - On SQLite, use: strftime('%Y', date) = '2025' or strftime('%Y-%m', date) = '2025-01'.
      - On PostgreSQL, use: EXTRACT(YEAR FROM date) = 2025 or TO_CHAR(date, 'YYYY-MM') = '2025-01'.
    - For string search, do case-insensitive search if possible, e.g. lower(description) LIKE '%amazon%' or lower(category) = 'groceries'.
-4. Do not expose internal fields like bill_image_url unless the user asks for the image/receipt of a transaction.
-5. If requires_db is false, write a friendly conversational response in explanation (e.g. for greetings or non-data questions).
+4. CRITICAL SECURITY RULE: Every generated SQL query MUST filter by user_id = '{current_user.id}'. Do NOT omit this constraint under any circumstances, to ensure user data isolation!
+   - E.g.: SELECT * FROM expenses WHERE user_id = '{current_user.id}' AND ...
+5. Do not expose internal fields like bill_image_url or user_id unless the user asks for the image/receipt of a transaction.
+6. If requires_db is false, write a friendly conversational response in explanation (e.g. for greetings or non-data questions).
 
 User Question: {req.message}
 """
@@ -243,7 +253,7 @@ User Question: {req.message}
                 sql_query = decision.get("sql_query")
                 try:
                     # Step 2: Query execution
-                    db_results = execute_read_only_query(sql_query, session)
+                    db_results = execute_read_only_query(sql_query, current_user.id, session)
                 except Exception as db_err:
                     db_results = [{"error": str(db_err)}]
                     
@@ -272,10 +282,13 @@ If the results are empty, politely explain that no transactions matched their cr
                 
         except Exception as e:
             # Fallback to local rule-based agent if any Gemini call fails
-            response_text = f"An error occurred while communicating with the AI model: {str(e)}. Falling back to local helper.\n\n" + run_local_rule_based_agent(req.message, load_expenses())
+            statement = select(Expense).where(Expense.user_id == current_user.id).order_by(Expense.date.desc())
+            expenses = session.exec(statement).all()
+            response_text = f"An error occurred while communicating with the AI model: {str(e)}. Falling back to local helper.\n\n" + run_local_rule_based_agent(req.message, expenses)
     else:
         # Fallback to local rule-based analysis
-        expenses = load_expenses()
+        statement = select(Expense).where(Expense.user_id == current_user.id).order_by(Expense.date.desc())
+        expenses = session.exec(statement).all()
         response_text = run_local_rule_based_agent(req.message, expenses)
 
     # Standard suggested actions

@@ -42,13 +42,18 @@ app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 app.include_router(expenses.router, prefix="/api/expenses", tags=["Expenses"])
 app.include_router(agent.router, prefix="/api/agent", tags=["AI Agent"])
 
-@app.get("/")
-def read_root():
-    return {
-        "message": "Welcome to the Finance AI Agents API!",
-        "docs_url": "/docs",
-        "status": "healthy"
-    }
+# Mount static frontend files if the directory exists
+static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+else:
+    @app.get("/")
+    def read_root():
+        return {
+            "message": "Welcome to the Finance AI Agents API!",
+            "docs_url": "/docs",
+            "status": "healthy"
+        }
 
 @app.get("/api/health")
 def health_check():

@@ -177,6 +177,28 @@ def main():
     for idx, row in df.iterrows():
         # Date parsing
         raw_date = row[mapping["date"]]
+        
+        # Check for total/summary rows first
+        desc_col = mapping["description"]
+        cat_col = mapping["category"]
+        desc_val = row[desc_col] if desc_col in df.columns else None
+        cat_val = row[cat_col] if cat_col in df.columns else None
+        cost_val = row[mapping["amount"]]
+        
+        cat_str = str(cat_val).strip().lower() if pd.notna(cat_val) else ""
+        desc_str = str(desc_val).strip().lower() if pd.notna(desc_val) else ""
+        
+        is_total = (
+            cat_str == 'total' or 
+            desc_str == 'total' or
+            'total' in cat_str or
+            'total' in desc_str or
+            (pd.isna(raw_date) and pd.isna(desc_val) and pd.isna(cat_val) and pd.notna(cost_val))
+        )
+        if is_total:
+            skipped_count += 1
+            continue
+
         if pd.isna(raw_date):
             skipped_count += 1
             continue

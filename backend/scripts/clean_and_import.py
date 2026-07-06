@@ -100,28 +100,81 @@ def clean_amount(val) -> float:
 def clean_category(cat_val) -> str:
     if pd.isna(cat_val):
         return "Uncategorized"
-    cat_str = str(cat_val).strip().lower()
+    cat_str = str(cat_val).strip()
     
-    # Standardize names matching UI Categories
-    if cat_str in ('groceries', 'supermarket', 'mercato'):
+    # Remove extra interior spaces (e.g. "Apartment  Bills" -> "Apartment Bills")
+    cat_str = " ".join(cat_str.split())
+    cat_lower = cat_str.lower()
+    
+    # 1. Groceries
+    if cat_lower in ('groceries', 'grocercies', 'supermarket', 'mercato', 'grocery'):
         return "Groceries"
-    elif cat_str in ('dine out', 'dineout', 'restaurant', 'food', 'gelato'):
+        
+    # 2. Gelato & Dining Out
+    if cat_lower in ('dine out', 'dineout', 'dinner', 'treat', 'cofee', 'coffee', 'cake', 'cakes', 'outing'):
         return "Gelato/Dining Out"
-    elif cat_str in ('transport', 'public transit', 'metro', 'train', 'bus', 'taxi'):
-        return "Public Transit"
-    elif cat_str in ('wifi', 'internet', 'fastweb'):
-        return "WiFi"
-    elif cat_str in ('electricity', 'enel', 'power'):
-        return "Electricity"
-    elif cat_str in ('gas', 'heating'):
-        return "Gas"
-    elif cat_str in ('rent', 'housing'):
+        
+    # 3. Rent
+    if cat_lower == 'rent':
         return "Rent"
-    elif cat_str in ('travel', 'flight', 'hotel'):
+        
+    # 4. Phone Bill
+    if cat_lower in ('phone bill', 'phone bills', 'phonebill', 'phone', 'recharge'):
+        return "Phone Bill"
+        
+    # 5. Apartment Bills
+    if cat_lower in ('apartment bill', 'apartment bills', 'apartments bills', 'appartment bill'):
+        return "Apartment Bills"
+        
+    # 6. Apartment Items
+    if cat_lower in ('apartment items', 'apartments items', 'appartment items', 'fan'):
+        return "Apartment Items"
+        
+    # 7. Clothing & Shoes
+    if cat_lower in ('clothes', 'dress', 'shoe', 'shoes'):
+        return "Clothing & Shoes"
+        
+    # 8. Bicycle & Cycle
+    if cat_lower in ('bicycle', 'bicycle parts', 'cycle', 'cycle parts'):
+        return "Bicycle/Cycle"
+        
+    # 9. Grooming
+    if cat_lower in ('groom', 'groom up', 'grooming', 'haircut', 'facewash'):
+        return "Grooming"
+        
+    # 10. Public Transit
+    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi'):
+        return "Public Transit"
+        
+    # 11. Travel
+    if cat_lower in ('travel', 'flight', 'hotel'):
         return "Travel"
-    
-    # Default to title case for other categories
-    return str(cat_val).strip().title()
+        
+    # 12. Entertainment & Leisure
+    if cat_lower in ('club', 'movie', 'party'):
+        return "Entertainment & Leisure"
+        
+    # 13. Gifts
+    if cat_lower in ('gift', 'gifts'):
+        return "Gifts"
+        
+    # 14. Medical & Hospital
+    if cat_lower in ('hospital', 'medical'):
+        return "Medical/Hospital"
+        
+    # 15. Fees & Licenses
+    if cat_lower in ('fees', 'license', 'licenses'):
+        return "Fees & Licenses"
+        
+    # 16. Apartment Repair
+    if cat_lower == 'apartment repair':
+        return "Apartment Repair"
+        
+    # 17. General / Others
+    if cat_lower in ('general', 'extra', 'others', 'shop', 'stamp', 'expeneses', 'expenses', 'bill', 'ipad', 'italian class', 'volleyball'):
+        return "General/Others"
+        
+    return cat_str.title()
 
 def clean_description(desc_val) -> str:
     if pd.isna(desc_val):
@@ -212,6 +265,12 @@ def import_to_db(records):
         existing_count = session.exec(select(Expense)).first()
         if existing_count is not None:
             print("⚠️ Database already contains records.")
+            confirm = input("Would you like to clear the existing expenses table before importing? (y/n): ").strip().lower()
+            if confirm == 'y':
+                print("Clearing database table...")
+                session.exec(Expense.__table__.delete()) # type: ignore
+                session.commit()
+                print("Database table cleared.")
             
         print(f"Importing {len(records)} records...")
         

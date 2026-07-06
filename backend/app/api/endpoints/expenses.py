@@ -11,7 +11,8 @@ from sqlalchemy import func
 from google import genai
 from google.genai import types
 from app.db import engine, get_session
-from app.models import Expense as DBExpense
+from app.models import Expense as DBExpense, User
+from app.auth import get_current_user
 
 router = APIRouter()
 
@@ -109,9 +110,10 @@ def detect_columns(columns):
 @router.get("/", response_model=List[DBExpense])
 def get_expenses(
     category: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    statement = select(DBExpense)
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
     if category:
         statement = statement.where(func.lower(DBExpense.category) == category.lower())
     statement = statement.order_by(DBExpense.date.desc())  # type: ignore
@@ -121,6 +123,7 @@ def get_expenses(
 @router.post("/", response_model=DBExpense)
 def create_expense(
     expense_in: ExpenseCreate,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     # Validate/parse date format
@@ -138,7 +141,8 @@ def create_expense(
         description=expense_in.description,
         category=expense_in.category or "Uncategorized",
         amount=round(expense_in.amount, 2),
-        bill_image_url=expense_in.bill_image_url
+        bill_image_url=expense_in.bill_image_url,
+        user_id=current_user.id
     )
     session.add(expense)
     session.commit()
@@ -146,8 +150,11 @@ def create_expense(
     return expense
 
 @router.delete("/clear")
-def clear_expenses(session: Session = Depends(get_session)):
-    session.exec(delete(DBExpense))
+def clear_expenses(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    session.exec(delete(DBExpense).where(DBExpense.user_id == current_user.id))
     session.commit()
     return {"message": "All expenses cleared successfully"}
 
@@ -155,6 +162,7 @@ def clear_expenses(session: Session = Depends(get_session)):
 def upload_file(
     file: UploadFile = File(...),
     save: bool = True,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     filename = file.filename or ""
@@ -240,7 +248,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                 description=description,
                 category=category,
                 amount=amount,
-                bill_image_url=f"/uploads/{unique_filename}"
+                bill_image_url=f"/uploads/{unique_filename}",
+                user_id=current_user.id
             )
             
             if save:
@@ -341,7 +350,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                     season=season,
                     description=description,
                     category=category,
-                    amount=amount
+                    amount=amount,
+                    user_id=current_user.id
                 )
                 expenses_to_insert.append(db_expense)
                 imported_count += 1
@@ -363,8 +373,11 @@ Analyze the uploaded bill or receipt image. Extract the following information:
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
 
 @router.get("/summary")
-def get_summary(session: Session = Depends(get_session)):
-    statement = select(DBExpense)
+def get_summary(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
     expenses = session.exec(statement).all()
     
     if not expenses:
@@ -437,4 +450,23 @@ def get_summary(session: Session = Depends(get_session)):
         "by_category": sorted_categories,
         "by_month": sorted_months,
         "by_season": by_season,
+    }
+
+@router.get("/profile")
+def get_profile(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    # Calculate stats for profile page
+    statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
+    expenses = session.exec(statement).all()
+    
+    total_spent = sum(e.amount for e in expenses)
+    count = len(expenses)
+    
+    return {
+        "email": current_user.email,
+        "total_spent": round(total_spent, 2),
+        "transaction_count": count,
+        "created_at": current_user.created_at.strftime("%Y-%m-%d") if current_user.created_at else None
     }

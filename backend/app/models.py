@@ -4,6 +4,21 @@ from typing import Optional
 from sqlmodel import SQLModel, Field, Column, DateTime
 
 
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4, primary_key=True, index=True, nullable=False
+    )
+    email: str = Field(unique=True, index=True, nullable=False)
+    created_at: datetime.datetime = Field(
+        default_factory=datetime.datetime.utcnow,
+        sa_column=Column(
+            DateTime(timezone=True), default=datetime.datetime.utcnow, nullable=False
+        ),
+    )
+
+
 class Expense(SQLModel, table=True):
     __tablename__ = "expenses"
 
@@ -16,6 +31,9 @@ class Expense(SQLModel, table=True):
     category: str = Field(index=True)
     amount: float
     bill_image_url: Optional[str] = Field(default=None, nullable=True)
+    user_id: Optional[uuid.UUID] = Field(
+        default=None, foreign_key="users.id", index=True, nullable=True
+    )
     created_at: datetime.datetime = Field(
         default_factory=datetime.datetime.utcnow,
         sa_column=Column(

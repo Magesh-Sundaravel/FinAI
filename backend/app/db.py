@@ -32,7 +32,7 @@ engine = create_engine(DATABASE_URL, echo=True, connect_args=connect_args)
 
 def init_db():
     # Import models here to make sure they are registered on SQLModel.metadata before creation
-    from app.models import Expense  # noqa: F401
+    from app.models import Expense, User  # noqa: F401
     SQLModel.metadata.create_all(engine)
 
 def get_session():

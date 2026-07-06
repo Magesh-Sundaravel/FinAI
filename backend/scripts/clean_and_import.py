@@ -10,7 +10,7 @@ from sqlmodel import SQLModel, Session, select
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import DATABASE_URL, engine
-from app.models import Expense
+from app.models import Expense, User
 
 EXCEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "historical_expenses.xlsx")
 CLEANED_CSV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "cleaned_historical_expenses.csv")
@@ -18,7 +18,7 @@ CLEANED_CSV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 MONTH_MAP = {
     'OCT': 10, 'NOV': 11, 'DEC': 12,
     'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
-    'JUL': 7, 'AUG': 8, 'SEP': 9
+    'JUL': 7, 'JULY': 7, 'AUG': 8, 'SEP': 9
 }
 
 def get_season(date_val) -> str:
@@ -186,8 +186,8 @@ def process_excel():
     skipped_empty = 0
     
     for sheet in xl.sheet_names:
-        # Check sheet name matches expected pattern (e.g. OCT_2020)
-        if not re.match(r'^[A-Za-z]{3}_\d{4}$', sheet):
+        # Check sheet name matches expected pattern (e.g. OCT_2020 or JULY_2021)
+        if not re.match(r'^[A-Za-z]{3,4}_\d{4}$', sheet):
             print(f"Skipping sheet with invalid format name: {sheet}")
             continue
             
@@ -257,25 +257,43 @@ def process_excel():
     
     return cleaned_rows
 
-def import_to_db(records):
+def import_to_db(records, email="dev-user@gmail.com", clear_existing=False, auto_confirm=False):
     print(f"\nConnecting to database at: {DATABASE_URL}")
     
     # Ensure tables exist
     SQLModel.metadata.create_all(engine)
     
     with Session(engine) as session:
-        # Check if we have existing records
-        existing_count = session.exec(select(Expense)).first()
+        # Find or create user
+        statement = select(User).where(User.email == email)
+        user = session.exec(statement).first()
+        if not user:
+            print(f"👤 Creating user profile for {email}...")
+            user = User(email=email)
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        else:
+            print(f"👤 Found existing user profile for {email} (ID: {user.id})")
+
+        # Check if we have existing records for this user
+        existing_count = session.exec(select(Expense).where(Expense.user_id == user.id)).first()
         if existing_count is not None:
-            print("⚠️ Database already contains records.")
-            confirm = input("Would you like to clear the existing expenses table before importing? (y/n): ").strip().lower()
-            if confirm == 'y':
-                print("Clearing database table...")
-                session.exec(Expense.__table__.delete()) # type: ignore
-                session.commit()
-                print("Database table cleared.")
+            print(f"⚠️ Database already contains records for {email}.")
+            if clear_existing:
+                confirm = 'y'
+            elif auto_confirm:
+                confirm = 'n'
+            else:
+                confirm = input("Would you like to clear the existing expenses for this user before importing? (y/n): ").strip().lower()
             
-        print(f"Importing {len(records)} records...")
+            if confirm == 'y':
+                print(f"Clearing database table for user {email}...")
+                session.exec(Expense.__table__.delete().where(Expense.user_id == user.id)) # type: ignore
+                session.commit()
+                print("User's expenses cleared.")
+            
+        print(f"Importing {len(records)} records for user {email}...")
         
         batch = []
         batch_size = 500
@@ -287,7 +305,8 @@ def import_to_db(records):
                 description=rec["description"],
                 category=rec["category"],
                 amount=rec["amount"],
-                bill_image_url=None
+                bill_image_url=None,
+                user_id=user.id
             )
             batch.append(expense)
             
@@ -305,6 +324,13 @@ def import_to_db(records):
     print("🎉 Database migration completed!")
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Clean and migrate historical expenses from Excel.")
+    parser.add_argument("--email", default="dev-user@gmail.com", help="Email of the user profile to import into.")
+    parser.add_argument("--clear", action="store_true", help="Automatically clear existing expenses for the user.")
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation prompts.")
+    args = parser.parse_args()
+
     if not os.path.exists(EXCEL_PATH):
         print(f"❌ Error: Excel file not found at {EXCEL_PATH}")
         print("Please copy your spreadsheet to that path and run again.")
@@ -312,4 +338,4 @@ if __name__ == "__main__":
         
     records = process_excel()
     if records:
-        import_to_db(records)
+        import_to_db(records, email=args.email, clear_existing=args.clear, auto_confirm=args.yes)

@@ -1,6 +1,8 @@
 import os
 import uuid
 import json
+import io
+import re
 from typing import List, Optional
 from datetime import datetime
 import pandas as pd  # type: ignore
@@ -90,11 +92,86 @@ def clean_amount(val) -> float:
         return float(val)
 
     # String cleaning
-    str_val = str(val).replace("€", "").replace("$", "").replace(",", "").strip()
+    str_val = str(val).replace("..", ".").replace("€", "").replace("$", "").replace(",", "").strip()
     try:
         return float(str_val)
     except ValueError:
         return 0.0
+
+def clean_category(cat_val) -> str:
+    if pd.isna(cat_val):
+        return "Uncategorized"
+    cat_str = str(cat_val).strip()
+    
+    # Remove extra interior spaces (e.g. "Apartment  Bills" -> "Apartment Bills")
+    cat_str = " ".join(cat_str.split())
+    cat_lower = cat_str.lower()
+    
+    # 1. Groceries
+    if cat_lower in ('groceries', 'grocercies', 'supermarket', 'mercato', 'grocery'):
+        return "Groceries"
+        
+    # 2. Gelato & Dining Out
+    if cat_lower in ('dine out', 'dineout', 'dinner', 'treat', 'cofee', 'coffee', 'cake', 'cakes', 'outing'):
+        return "Gelato/Dining Out"
+        
+    # 3. Rent
+    if cat_lower == 'rent':
+        return "Rent"
+        
+    # 4. Phone Bill
+    if cat_lower in ('phone bill', 'phone bills', 'phonebill', 'phone', 'recharge'):
+        return "Phone Bill"
+        
+    # 5. Apartment Bills
+    if cat_lower in ('apartment bill', 'apartment bills', 'apartments bills', 'appartment bill'):
+        return "Apartment Bills"
+        
+    # 6. Apartment Items
+    if cat_lower in ('apartment items', 'apartments items', 'appartment items', 'fan'):
+        return "Apartment Items"
+        
+    # 7. Clothing & Shoes
+    if cat_lower in ('clothes', 'dress', 'shoe', 'shoes'):
+        return "Clothing & Shoes"
+        
+    # 8. Bicycle & Cycle
+    if cat_lower in ('bicycle', 'bicycle parts', 'cycle', 'cycle parts'):
+        return "Bicycle/Cycle"
+        
+    # 9. Grooming
+    if cat_lower in ('groom', 'groom up', 'grooming', 'haircut', 'facewash'):
+        return "Grooming"
+        
+    # 10. Travel & Transit
+    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi', 'travel', 'flight', 'hotel'):
+        return "Travel & Transit"
+        
+    # 12. Entertainment & Leisure
+    if cat_lower in ('club', 'movie', 'party'):
+        return "Entertainment & Leisure"
+        
+    # 13. Gifts
+    if cat_lower in ('gift', 'gifts'):
+        return "Gifts"
+        
+    # 14. Medical & Hospital
+    if cat_lower in ('hospital', 'medical'):
+        return "Medical/Hospital"
+        
+    # 15. Fees & Licenses
+    if cat_lower in ('fees', 'license', 'licenses'):
+        return "Fees & Licenses"
+        
+    # 16. Apartment Repair
+    if cat_lower == 'apartment repair':
+        return "Apartment Repair"
+        
+    # 17. General / Others
+    if cat_lower in ('general', 'extra', 'others', 'shop', 'stamp', 'expeneses', 'expenses', 'bill', 'ipad', 'italian class', 'volleyball'):
+        return "General/Others"
+        
+    return cat_str.title()
 
 def detect_columns(columns):
     """
@@ -296,12 +373,136 @@ Analyze the uploaded bill or receipt image. Extract the following information:
             
         # 2. Handle Spreadsheet Ingestion
         else:
-            # Read file into DataFrame
+            is_multi_sheet = False
+            # Read file into DataFrame or load as ExcelFile
             if ext == ".csv":
                 df = pd.read_csv(file.file)
             else:
-                df = pd.read_excel(file.file)
+                # Read bytes and check for multi-sheet Excel format
+                file_bytes = file.file.read()
+                xl = pd.ExcelFile(io.BytesIO(file_bytes))
                 
+                # Check for sheets matching the monthly pattern
+                monthly_sheets = [s for s in xl.sheet_names if re.match(r'^[A-Za-z]{3,4}_\d{4}$', s)]
+                
+                if monthly_sheets:
+                    is_multi_sheet = True
+                    imported_count = 0
+                    expenses_to_insert = []
+                    
+                    month_map = {
+                        'OCT': 10, 'NOV': 11, 'DEC': 12,
+                        'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                        'JUL': 7, 'JULY': 7, 'AUG': 8, 'SEP': 9
+                    }
+                    
+                    for sheet in monthly_sheets:
+                        parts = sheet.split('_')
+                        sheet_month = month_map[parts[0].upper()]
+                        sheet_year = int(parts[1])
+                        
+                        sheet_df = xl.parse(sheet)
+                        if sheet_df.empty:
+                            continue
+                            
+                        # Resolve columns
+                        category_col = None
+                        if 'Category' in sheet_df.columns:
+                            category_col = 'Category'
+                        elif 'Type' in sheet_df.columns:
+                            category_col = 'Type'
+                            
+                        if not category_col or 'Cost' not in sheet_df.columns or 'Description' not in sheet_df.columns or 'Date' not in sheet_df.columns:
+                            continue
+                            
+                        for _, row in sheet_df.iterrows():
+                            desc_val = row['Description']
+                            cat_val = row[category_col]
+                            cost_val = row['Cost']
+                            date_val = row['Date']
+                            
+                            if pd.isna(desc_val) and pd.isna(cost_val) and pd.isna(date_val):
+                                continue
+                                
+                            cat_str = str(cat_val).strip().lower() if pd.notna(cat_val) else ""
+                            desc_str = str(desc_val).strip().lower() if pd.notna(desc_val) else ""
+                            is_total = (
+                                cat_str == 'total' or 
+                                desc_str == 'total' or
+                                'total' in cat_str or
+                                'total' in desc_str or
+                                (pd.isna(date_val) and pd.isna(desc_val) and pd.isna(cat_val) and pd.notna(cost_val))
+                            )
+                            if is_total:
+                                continue
+                                
+                            day = 1
+                            if isinstance(date_val, (datetime, pd.Timestamp)):
+                                if date_val.month == sheet_month:
+                                    day = date_val.day
+                                elif date_val.day == sheet_month:
+                                    day = date_val.month
+                                else:
+                                    day = date_val.day
+                            elif isinstance(date_val, str):
+                                date_str_cleaned = date_val.strip()
+                                parsed_day = None
+                                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y"):
+                                    try:
+                                        dt = datetime.strptime(date_str_cleaned, fmt)
+                                        parsed_day = dt.day
+                                        break
+                                    except ValueError:
+                                        continue
+                                if parsed_day is not None:
+                                    day = parsed_day
+                                else:
+                                    for delim in ("/", "-", "."):
+                                        if delim in date_str_cleaned:
+                                            try:
+                                                day = int(date_str_cleaned.split(delim)[0])
+                                                break
+                                            except ValueError:
+                                                pass
+                            elif isinstance(date_val, (int, float)):
+                                day = int(date_val)
+                                
+                            try:
+                                parsed_date = datetime(sheet_year, sheet_month, day).date()
+                            except ValueError:
+                                parsed_date = datetime(sheet_year, sheet_month, 1).date()
+                                
+                            cleaned_cat = clean_category(cat_val)
+                            cleaned_amt = clean_amount(cost_val)
+                            if cleaned_amt <= 0:
+                                continue
+                                
+                            cleaned_desc = str(desc_val).strip() if pd.notna(desc_val) else "Unknown Expense"
+                            
+                            db_expense = DBExpense(
+                                date=parsed_date,
+                                season=get_season(parsed_date),
+                                description=cleaned_desc,
+                                category=cleaned_cat,
+                                amount=cleaned_amt,
+                                user_id=current_user.id
+                            )
+                            expenses_to_insert.append(db_expense)
+                            imported_count += 1
+                            
+                    if expenses_to_insert:
+                        for exp in expenses_to_insert:
+                            session.add(exp)
+                        session.commit()
+                        
+                    return {
+                        "message": f"Successfully cleaned and imported {imported_count} expenses from {len(monthly_sheets)} sheets.",
+                        "type": "spreadsheet",
+                        "columns_detected": {"mode": "historical_multi_sheet"}
+                    }
+                else:
+                    df = xl.parse(xl.sheet_names[0])
+                    
             if df.empty:
                 raise HTTPException(status_code=400, detail="The uploaded file is empty.")
                 
@@ -372,7 +573,7 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                     
                 # Category parsing
                 raw_cat = row[mapping["category"]] if mapping["category"] in df.columns else "Uncategorized"
-                category = str(raw_cat).strip() if pd.notna(raw_cat) else "Uncategorized"
+                category = clean_category(raw_cat)
                 
                 season = get_season(parsed_date)
                 

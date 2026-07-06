@@ -204,7 +204,7 @@ Schema:
 - date: DATE (The date of the transaction/expense, format: YYYY-MM-DD)
 - season: VARCHAR (Derived season: 'Winter', 'Spring', 'Summer', 'Autumn')
 - description: VARCHAR (The merchant or vendor name)
-- category: VARCHAR (The category of spend, e.g. 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel')
+- category: VARCHAR (The category of spend, e.g. 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out')
 - amount: FLOAT (The transaction amount in Euros)
 - bill_image_url: VARCHAR (Optional filepath to receipt/bill photo)
 - created_at: TIMESTAMP

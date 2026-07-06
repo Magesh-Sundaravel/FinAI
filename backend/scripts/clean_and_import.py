@@ -142,13 +142,9 @@ def clean_category(cat_val) -> str:
     if cat_lower in ('groom', 'groom up', 'grooming', 'haircut', 'facewash'):
         return "Grooming"
         
-    # 10. Public Transit
-    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi'):
-        return "Public Transit"
-        
-    # 11. Travel
-    if cat_lower in ('travel', 'flight', 'hotel'):
-        return "Travel"
+    # 10. Travel & Transit
+    if cat_lower in ('train', 'transport', 'public transit', 'metro', 'bus', 'taxi', 'travel', 'flight', 'hotel'):
+        return "Travel & Transit"
         
     # 12. Entertainment & Leisure
     if cat_lower in ('club', 'movie', 'party'):

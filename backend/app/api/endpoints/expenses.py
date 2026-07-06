@@ -24,7 +24,7 @@ class ExpenseCreate(BaseModel):
 
 class ExpenseExtraction(BaseModel):
     description: str = Field(description="The merchant, vendor, or utility provider name (e.g. Enel, Conad, Esselunga, Fastweb, etc.).")
-    category: str = Field(description="The category of spend: Choose the most appropriate from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.")
+    category: str = Field(description="The category of spend: Choose the most appropriate from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out'. If none of these match, select another appropriate short category name.")
     amount: float = Field(description="The total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.")
     date: str = Field(description="The transaction or invoice date in YYYY-MM-DD format.")
 
@@ -202,7 +202,7 @@ def upload_file(
             prompt = """
 Analyze the uploaded bill or receipt image. Extract the following information:
 1. Merchant/Vendor/Utility provider name (e.g. Enel, Conad, Esselunga, Fastweb).
-2. Category of spend: Choose the most appropriate category from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Public Transit', 'Gelato/Dining Out', 'Travel'. If none of these match, select another appropriate short category name.
+2. Category of spend: Choose the most appropriate category from: 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out'. If none of these match, select another appropriate short category name.
 3. Total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.
 4. Transaction or invoice date in YYYY-MM-DD format.
 """

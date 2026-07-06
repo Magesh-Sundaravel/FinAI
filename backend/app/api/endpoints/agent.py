@@ -49,12 +49,17 @@ def execute_read_only_query(query_str: str, user_id: uuid.UUID, session: Session
         
     # Enforce user isolation check
     user_id_str = str(user_id)
-    if user_id_str not in query_str:
+    user_id_hex = user_id.hex
+    if user_id_str not in query_str and user_id_hex not in query_str:
         raise ValueError("Security policy violation: query must filter by your specific user_id")
         
     if "limit" not in query_lower:
         query_str = query_str.strip().rstrip(';')
         query_str = f"{query_str} LIMIT 100"
+        
+    # Replace hyphenated UUID with hex UUID for SQLite database dialect compatibility
+    if engine.dialect.name == "sqlite":
+        query_str = query_str.replace(user_id_str, user_id_hex)
         
     result = session.execute(text(query_str))
     return [dict(row._mapping) for row in result.all()]

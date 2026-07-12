@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 import json
@@ -8,11 +9,12 @@ from datetime import datetime
 import pandas as pd  # type: ignore
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel, Field
-from sqlmodel import Session, select, delete
+from sqlmodel import select, delete
+from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func
 from google import genai
 from google.genai import types
-from app.db import engine, get_session
+from app.db import AsyncSessionLocal, get_session
 from app.models import Expense as DBExpense, User
 from app.auth import get_current_user
 
@@ -73,14 +75,14 @@ def upload_to_gcs(file_bytes: bytes, filename: str, content_type: str) -> Option
         print(f"Failed to upload to GCS: {e}")
         return None
 
-def load_expenses() -> List[DBExpense]:
+async def load_expenses() -> List[DBExpense]:
     """
     Load all expenses from the database for compatibility/fallback.
     """
-    with Session(engine) as session:
+    async with AsyncSessionLocal() as session:
         statement = select(DBExpense).order_by(DBExpense.date.desc())  # type: ignore
-        results = session.exec(statement).all()
-        return list(results)
+        result = await session.exec(statement)
+        return list(result.all())
 
 def clean_amount(val) -> float:
     """
@@ -213,23 +215,23 @@ def detect_columns(columns):
     return col_map
 
 @router.get("/", response_model=List[DBExpense])
-def get_expenses(
+async def get_expenses(
     category: Optional[str] = None,
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
     if category:
         statement = statement.where(func.lower(DBExpense.category) == category.lower())
     statement = statement.order_by(DBExpense.date.desc())  # type: ignore
-    results = session.exec(statement).all()
-    return list(results)
+    result = await session.exec(statement)
+    return list(result.all())
 
 @router.post("/", response_model=DBExpense)
-def create_expense(
+async def create_expense(
     expense_in: ExpenseCreate,
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     # Validate/parse date format
     try:
@@ -237,9 +239,9 @@ def create_expense(
     except ValueError:
         # Fallback to today's date if invalid format
         parsed_date = datetime.utcnow().date()
-        
+
     season = get_season(parsed_date)
-    
+
     expense = DBExpense(
         date=parsed_date,
         season=season,
@@ -250,25 +252,25 @@ def create_expense(
         user_id=current_user.id
     )
     session.add(expense)
-    session.commit()
-    session.refresh(expense)
+    await session.commit()
+    await session.refresh(expense)
     return expense
 
 @router.delete("/clear")
-def clear_expenses(
+async def clear_expenses(
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
-    session.exec(delete(DBExpense).where(DBExpense.user_id == current_user.id))
-    session.commit()
+    await session.exec(delete(DBExpense).where(DBExpense.user_id == current_user.id))
+    await session.commit()
     return {"message": "All expenses cleared successfully"}
 
 @router.post("/upload")
-def upload_file(
+async def upload_file(
     file: UploadFile = File(...),
     save: bool = True,
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
@@ -290,31 +292,37 @@ def upload_file(
                 )
                 
             # Read file bytes
-            file_bytes = file.file.read()
+            file_bytes = await file.read()
             if not file_bytes:
                 raise HTTPException(status_code=400, detail="The uploaded image is empty.")
-                
+
             # Upload to GCS if bucket is configured
-            gcs_url = upload_to_gcs(file_bytes, file.filename or "receipt.jpg", file.content_type or "image/jpeg")
+            gcs_url = await asyncio.to_thread(
+                upload_to_gcs, file_bytes, file.filename or "receipt.jpg", file.content_type or "image/jpeg"
+            )
             unique_filename = ""
-            
+
             # Fallback to local storage if GCS is not configured
             if not gcs_url:
                 uploads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "data", "uploads")
                 os.makedirs(uploads_dir, exist_ok=True)
                 unique_filename = f"{uuid.uuid4()}{ext}"
                 file_path = os.path.join(uploads_dir, unique_filename)
-                with open(file_path, "wb") as f:
-                    f.write(file_bytes)
-                
+
+                def _write_local_file():
+                    with open(file_path, "wb") as f:
+                        f.write(file_bytes)
+
+                await asyncio.to_thread(_write_local_file)
+
             # Invoke google-genai Client
             client = genai.Client(api_key=api_key)
-            
+
             image_part = types.Part.from_bytes(
                 data=file_bytes,
                 mime_type=file.content_type or f"image/{ext[1:] if ext != '.jpg' else 'jpeg'}"
             )
-            
+
             prompt = """
 Analyze the uploaded bill or receipt image. Extract the following information:
 1. Merchant/Vendor/Utility provider name (e.g. Enel, Conad, Esselunga, Fastweb).
@@ -322,8 +330,9 @@ Analyze the uploaded bill or receipt image. Extract the following information:
 3. Total amount of the transaction in Euros (€). If the currency is different, convert it to Euros.
 4. Transaction or invoice date in YYYY-MM-DD format.
 """
-            
-            response = client.models.generate_content(
+
+            response = await asyncio.to_thread(
+                client.models.generate_content,
                 model="gemini-2.5-flash",
                 contents=[image_part, prompt],
                 config=types.GenerateContentConfig(
@@ -331,25 +340,25 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                     response_schema=ExpenseExtraction
                 )
             )
-            
+
             if not response.text:
                 raise HTTPException(status_code=500, detail="Empty response received from Gemini API.")
-                
+
             extracted = json.loads(response.text)
-            
+
             # Parse date
             date_str = extracted.get("date")
             try:
                 parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
             except Exception:
                 parsed_date = datetime.utcnow().date()
-                
+
             season = get_season(parsed_date)
             description = extracted.get("description", "Unknown Merchant").strip()
             category = extracted.get("category", "Groceries").strip()
             amount = clean_amount(extracted.get("amount", 0.0))
             amount = round(amount, 2)
-            
+
             db_expense = DBExpense(
                 date=parsed_date,
                 season=season,
@@ -359,12 +368,12 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                 bill_image_url=gcs_url if gcs_url else f"/uploads/{unique_filename}",
                 user_id=current_user.id
             )
-            
+
             if save:
                 session.add(db_expense)
-                session.commit()
-                session.refresh(db_expense)
-            
+                await session.commit()
+                await session.refresh(db_expense)
+
             return {
                 "message": "Successfully parsed and imported receipt/bill." if save else "Successfully parsed receipt/bill.",
                 "type": "image",
@@ -376,26 +385,27 @@ Analyze the uploaded bill or receipt image. Extract the following information:
             is_multi_sheet = False
             # Read file into DataFrame or load as ExcelFile
             if ext == ".csv":
-                df = pd.read_csv(file.file)
+                csv_bytes = await file.read()
+                df = await asyncio.to_thread(pd.read_csv, io.BytesIO(csv_bytes))
             else:
                 # Read bytes and check for multi-sheet Excel format
-                file_bytes = file.file.read()
-                xl = pd.ExcelFile(io.BytesIO(file_bytes))
-                
+                file_bytes = await file.read()
+                xl = await asyncio.to_thread(pd.ExcelFile, io.BytesIO(file_bytes))
+
                 # Check for sheets matching the monthly pattern
                 monthly_sheets = [s for s in xl.sheet_names if re.match(r'^[A-Za-z]{3,4}_\d{4}$', s)]
-                
+
                 if monthly_sheets:
                     is_multi_sheet = True
                     imported_count = 0
                     expenses_to_insert = []
-                    
+
                     month_map = {
                         'OCT': 10, 'NOV': 11, 'DEC': 12,
                         'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
                         'JUL': 7, 'JULY': 7, 'AUG': 8, 'SEP': 9
                     }
-                    
+
                     for sheet in monthly_sheets:
                         parts = sheet.split('_')
                         sheet_month = month_map[parts[0].upper()]
@@ -493,8 +503,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
                     if expenses_to_insert:
                         for exp in expenses_to_insert:
                             session.add(exp)
-                        session.commit()
-                        
+                        await session.commit()
+
                     return {
                         "message": f"Successfully cleaned and imported {imported_count} expenses from {len(monthly_sheets)} sheets.",
                         "type": "spreadsheet",
@@ -591,8 +601,8 @@ Analyze the uploaded bill or receipt image. Extract the following information:
             if expenses_to_insert:
                 for exp in expenses_to_insert:
                     session.add(exp)
-                session.commit()
-                
+                await session.commit()
+
             return {
                 "message": f"Successfully imported {imported_count} expenses.",
                 "type": "spreadsheet",
@@ -605,13 +615,15 @@ Analyze the uploaded bill or receipt image. Extract the following information:
         raise HTTPException(status_code=500, detail=f"Error parsing file: {str(e)}")
 
 @router.get("/summary")
-def get_summary(
+async def get_summary(
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
-    expenses = session.exec(statement).all()
-    
+    result = await session.exec(statement)
+    expenses = result.all()
+
+
     if not expenses:
         return {
             "total_spent": 0.0,
@@ -685,14 +697,16 @@ def get_summary(
     }
 
 @router.get("/profile")
-def get_profile(
+async def get_profile(
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ):
     # Calculate stats for profile page
     statement = select(DBExpense).where(DBExpense.user_id == current_user.id)
-    expenses = session.exec(statement).all()
-    
+    result = await session.exec(statement)
+    expenses = result.all()
+
+
     total_spent = sum(e.amount for e in expenses)
     count = len(expenses)
     

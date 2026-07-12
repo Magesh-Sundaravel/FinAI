@@ -1,7 +1,8 @@
 import os
 from typing import Optional
 from fastapi import Header, Depends
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db import get_session
 from app.models import User
 
@@ -22,21 +23,22 @@ def get_current_user_email(
         email = email.split(":", 1)[1]
     return email.strip()
 
-def get_current_user(
+async def get_current_user(
     email: str = Depends(get_current_user_email),
-    session: Session = Depends(get_session)
+    session: AsyncSession = Depends(get_session)
 ) -> User:
     """
     Get or create the user profile in the database based on the authenticated email.
     """
     statement = select(User).where(User.email == email)
-    user = session.exec(statement).first()
-    
+    result = await session.exec(statement)
+    user = result.first()
+
     if not user:
         # Auto-create user profile on first login
         user = User(email=email)
         session.add(user)
-        session.commit()
-        session.refresh(user)
-        
+        await session.commit()
+        await session.refresh(user)
+
     return user

@@ -1,68 +1,45 @@
-import os
 import json
-import re
-import urllib.request
+import os
 import urllib.error
-import uuid
-from typing import Optional, List
+import urllib.request
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
-from sqlalchemy import text
-from sqlmodel import Session, select
-from google import genai
-from google.genai import types
-from app.db import engine, get_session, get_readonly_session
-from app.models import Expense, User
+from pydantic import BaseModel
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.agent.graph import build_agent_graph
 from app.auth import get_current_user
+from app.db import get_readonly_session
+from app.models import Expense, User
 
 router = APIRouter()
+
+
+def _extract_text(content) -> str:
+    """
+    AIMessage.content is either a plain string or a list of content blocks
+    (e.g. [{"type": "text", "text": "..."}]) depending on the model/provider.
+    Normalize to a plain string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"]
+        return "".join(parts)
+    return str(content)
 
 
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[dict]] = None
+    thread_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     response: str
     suggested_actions: Optional[List[str]] = None
-
-
-class AgentDecision(BaseModel):
-    requires_db: bool = Field(description="Set to true if the user query asks for specific expense data, summaries, calculations, or trends from their database. Set to false for general conversational questions, greetings, or actions like clearing data.")
-    sql_query: Optional[str] = Field(default=None, description="The SQL query to execute if requires_db is true. Must start with SELECT and be read-only.")
-    explanation: Optional[str] = Field(default=None, description="Provide a conversational response here if requires_db is false.")
-
-
-def execute_read_only_query(query_str: str, user_id: uuid.UUID, session: Session) -> list:
-    """
-    Safely execute a generated SQL query ensuring it is read-only and restricted to the user.
-    """
-    forbidden = ["insert", "update", "delete", "drop", "alter", "truncate", "replace", "create"]
-    query_lower = query_str.lower()
-    for word in forbidden:
-        if re.search(r'\b' + word + r'\b', query_lower):
-            raise ValueError(f"Security policy violation: query contains forbidden keyword '{word}'")
-            
-    if not query_lower.strip().startswith("select"):
-        raise ValueError("Security policy violation: only SELECT queries are allowed")
-        
-    # Enforce user isolation check
-    user_id_str = str(user_id)
-    user_id_hex = user_id.hex
-    if user_id_str not in query_str and user_id_hex not in query_str:
-        raise ValueError("Security policy violation: query must filter by your specific user_id")
-        
-    if "limit" not in query_lower:
-        query_str = query_str.strip().rstrip(';')
-        query_str = f"{query_str} LIMIT 100"
-        
-    # Replace hyphenated UUID with hex UUID for SQLite database dialect compatibility
-    if engine.dialect.name == "sqlite":
-        query_str = query_str.replace(user_id_str, user_id_hex)
-        
-    result = session.execute(text(query_str))
-    return [dict(row._mapping) for row in result.all()]
 
 
 def get_gemini_response(prompt: str, api_key: str) -> str:
@@ -195,105 +172,33 @@ def run_local_rule_based_agent(message: str, expenses) -> str:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat_with_agent(
+async def chat_with_agent(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_readonly_session)
+    session: AsyncSession = Depends(get_readonly_session)
 ):
     api_key = os.environ.get("GEMINI_API_KEY")
 
     if api_key:
-        client = genai.Client(api_key=api_key)
-        dialect_name = engine.dialect.name
-        
-        prompt = f"""
-You are a decision and SQL generation assistant for a personal finance chatbot.
-Your task is to analyze the user's question, determine if it requires database querying, and if so, generate a read-only SQL query for the user's question using the 'expenses' table.
+        graph = build_agent_graph()
+        thread_id = req.thread_id or str(current_user.id)
+        config = {"configurable": {"thread_id": thread_id, "user_id": str(current_user.id)}}
 
-Database Table: expenses
-Schema:
-- id: UUID (Primary Key)
-- date: DATE (The date of the transaction/expense, format: YYYY-MM-DD)
-- season: VARCHAR (Derived season: 'Winter', 'Spring', 'Summer', 'Autumn')
-- description: VARCHAR (The merchant or vendor name)
-- category: VARCHAR (The category of spend, e.g. 'Rent', 'WiFi', 'Electricity', 'Gas', 'Groceries', 'Travel & Transit', 'Gelato/Dining Out')
-- amount: FLOAT (The transaction amount in Euros)
-- bill_image_url: VARCHAR (Optional filepath to receipt/bill photo)
-- user_id: UUID (Foreign key to reference the specific user)
-- created_at: TIMESTAMP
-
-Guidelines:
-1. Determine if the query asks for database data/calculation/aggregation (requires_db = true).
-2. If requires_db is true, generate a valid SQL query starting with SELECT. Do not perform any modifications (INSERT, UPDATE, DELETE, etc.).
-3. The query MUST be compatible with the database dialect: '{dialect_name}'.
-   - For filtering by year/month:
-     - On SQLite, use: strftime('%Y', date) = '2025' or strftime('%Y-%m', date) = '2025-01'.
-     - On PostgreSQL, use: EXTRACT(YEAR FROM date) = 2025 or TO_CHAR(date, 'YYYY-MM') = '2025-01'.
-   - For string search, do case-insensitive search if possible, e.g. lower(description) LIKE '%amazon%' or lower(category) = 'groceries'.
-4. CRITICAL SECURITY RULE: Every generated SQL query MUST filter by user_id = '{current_user.id}'. Do NOT omit this constraint under any circumstances, to ensure user data isolation!
-   - E.g.: SELECT * FROM expenses WHERE user_id = '{current_user.id}' AND ...
-5. Do not expose internal fields like bill_image_url or user_id unless the user asks for the image/receipt of a transaction.
-6. If requires_db is false, write a friendly conversational response in explanation (e.g. for greetings or non-data questions).
-
-User Question: {req.message}
-"""
-        
         try:
-            # Step 1: intent detection & SQL generation
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=AgentDecision
-                )
-            )
-            
-            text_out = response.text
-            if not text_out:
-                raise ValueError("Empty response received from Gemini model.")
-            decision = json.loads(text_out)
-            
-            if decision.get("requires_db"):
-                sql_query = decision.get("sql_query")
-                try:
-                    # Step 2: Query execution
-                    db_results = execute_read_only_query(sql_query, current_user.id, session)
-                except Exception as db_err:
-                    db_results = [{"error": str(db_err)}]
-                    
-                # Step 3: Synthesis
-                synthesis_prompt = f"""
-You are "Finance AI Agent", a professional financial analysis agent.
-The user asked: "{req.message}"
-
-To answer this question, we ran the following SQL query:
-`{sql_query}`
-
-And retrieved the following results from the database:
-{json.dumps(db_results, indent=2, default=str)}
-
-Synthesize these database results into a concise, friendly, and helpful conversational answer. Format your response with clean markdown.
-If the query execution returned an error (e.g. key "error" in results), explain the problem politely and offer help.
-If the results are empty, politely explain that no transactions matched their criteria.
-"""
-                synthesis_response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=synthesis_prompt
-                )
-                response_text = synthesis_response.text or "I retrieved the data but couldn't generate a description."
-            else:
-                response_text = decision.get("explanation") or "Hello! I am your Finance AI Agent. How can I help you today?"
-                
+            result = await graph.ainvoke({"messages": [("user", req.message)]}, config)
+            last_message = result["messages"][-1]
+            response_text = _extract_text(last_message.content) or "I retrieved the data but couldn't generate a description."
         except Exception as e:
-            # Fallback to local rule-based agent if any Gemini call fails
+            # Fallback to local rule-based agent if the agent loop fails
             statement = select(Expense).where(Expense.user_id == current_user.id).order_by(Expense.date.desc())
-            expenses = session.exec(statement).all()
+            result_rows = await session.exec(statement)
+            expenses = result_rows.all()
             response_text = f"An error occurred while communicating with the AI model: {str(e)}. Falling back to local helper.\n\n" + run_local_rule_based_agent(req.message, expenses)
     else:
         # Fallback to local rule-based analysis
         statement = select(Expense).where(Expense.user_id == current_user.id).order_by(Expense.date.desc())
-        expenses = session.exec(statement).all()
+        result_rows = await session.exec(statement)
+        expenses = result_rows.all()
         response_text = run_local_rule_based_agent(req.message, expenses)
 
     # Standard suggested actions

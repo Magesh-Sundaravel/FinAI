@@ -12,7 +12,7 @@ from app.db import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize database tables (SQLite or Postgres depending on environment)
-    init_db()
+    await init_db()
     yield
 
 app = FastAPI(

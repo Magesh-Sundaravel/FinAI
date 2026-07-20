@@ -65,14 +65,28 @@ FinAI/
 ### 1. Local Development Sandbox (SQLite)
 FastAPI defaults to a local SQLite database when no external database URL is configured.
 
-#### Backend
-Ensure you have [uv](https://github.com/astral-sh/uv) installed:
+#### Local Setup
+Use one explicit local identity end-to-end. Set `DEV_USER_EMAIL` once, seed data for that same email, and run the backend in the same shell so the profile, expenses, and summaries all resolve to the same user.
+
 ```bash
 cd backend
-export GEMINI_API_KEY="your-gemini-api-key"
+export DEV_USER_EMAIL="your-email@example.com"
+uv run python scripts/seed_local_data.py --reset
 uv run uvicorn app.main:app --port 8000 --reload
 ```
+
+Ensure you have [uv](https://github.com/astral-sh/uv) installed. If `GEMINI_API_KEY` is already present in `backend/.env`, you do not need to export it again. Only export it in the shell if you want to override the `.env` value for the current session.
+
+If `DEV_USER_EMAIL` is not set and no Google IAP header is present, the backend now returns `401 Unauthorized` instead of silently falling back to a hard-coded local user. This avoids seeding data for one email and then accidentally browsing the app as a different user.
+
+#### Backend
 Interactive docs will be active at: `http://localhost:8000/docs`.
+
+The `/api/expenses/profile` response also reports the current auth source so the UI can clearly distinguish between:
+
+* `google_iap`: production-style authenticated user from Google IAP
+* `local_dev_env`: explicit local development user from `DEV_USER_EMAIL`
+* `demo_mode`: frontend fallback when the backend is unreachable
 
 #### Frontend
 ```bash

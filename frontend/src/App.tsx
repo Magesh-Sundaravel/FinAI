@@ -84,7 +84,7 @@ function App() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [selectedMonth, setSelectedMonth] = useState<string>('')
-  const [profile, setProfile] = useState<{ email: string; total_spent: number; transaction_count: number; created_at: string | null } | null>(null)
+  const [profile, setProfile] = useState<{ email: string; auth_source: string; total_spent: number; transaction_count: number; created_at: string | null } | null>(null)
   
   // UI states
   const [loading, setLoading] = useState(true)
@@ -239,6 +239,7 @@ function App() {
       setSummary(DEMO_SUMMARY)
       setProfile({
         email: "demo-user@gmail.com",
+        auth_source: "demo_mode",
         total_spent: DEMO_SUMMARY.total_spent,
         transaction_count: DEMO_SUMMARY.transaction_count,
         created_at: "2026-07-06"
@@ -320,6 +321,22 @@ function App() {
     } catch {
       showToast('error', 'Could not reach server')
     }
+  }
+
+  const getProfileStatusLabel = () => {
+    if (!profile) return 'Unknown'
+    if (profile.auth_source === 'google_iap') return 'Active (Verified via IAP)'
+    if (profile.auth_source === 'local_dev_env') return 'Active (Local DEV_USER_EMAIL)'
+    if (profile.auth_source === 'demo_mode') return 'Demo Mode'
+    return 'Active'
+  }
+
+  const getEnvironmentLabel = () => {
+    if (!profile) return 'Unknown'
+    if (profile.auth_source === 'google_iap') return 'Google Cloud Production'
+    if (profile.auth_source === 'local_dev_env') return 'Local Development'
+    if (profile.auth_source === 'demo_mode') return 'Sandbox (Demo)'
+    return isDemoMode ? 'Sandbox (Demo)' : 'Unknown'
   }
 
   const handleClear = async () => {
@@ -1631,7 +1648,7 @@ Or start the backend server to link actual spreadsheet parser results!`
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', color: 'var(--text-secondary)', fontSize: '14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>Account Status</span>
-                    <span style={{ color: 'var(--success)', fontWeight: '600' }}>Active (Verified via IAP)</span>
+                    <span style={{ color: 'var(--success)', fontWeight: '600' }}>{getProfileStatusLabel()}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>Member Since</span>
@@ -1639,9 +1656,15 @@ Or start the backend server to link actual spreadsheet parser results!`
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>Environment</span>
-                    <span style={{ color: '#fff' }}>{isDemoMode ? 'Sandbox (Demo)' : 'Google Cloud Production'}</span>
+                    <span style={{ color: '#fff' }}>{getEnvironmentLabel()}</span>
                   </div>
                 </div>
+
+                {profile.auth_source === 'local_dev_env' && (
+                  <div style={{ marginTop: '28px', padding: '12px', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.35)', borderRadius: '8px', color: '#93c5fd', fontSize: '13px', lineHeight: '1.5' }}>
+                    <strong>Local auth:</strong> This session is using <code>DEV_USER_EMAIL={profile.email}</code>. Seed and run the backend with the same email to test your real local dataset consistently.
+                  </div>
+                )}
 
                 {isDemoMode && (
                   <div style={{ marginTop: '28px', padding: '12px', background: 'rgba(234, 179, 8, 0.1)', border: '1px solid var(--warning)', borderRadius: '8px', color: 'var(--warning)', fontSize: '13px', lineHeight: '1.5' }}>

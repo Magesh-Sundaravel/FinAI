@@ -7,7 +7,7 @@ import re
 from typing import List, Optional
 from datetime import datetime
 import pandas as pd  # type: ignore
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 from sqlmodel import select, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -698,6 +698,7 @@ async def get_summary(
 
 @router.get("/profile")
 async def get_profile(
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
@@ -712,6 +713,7 @@ async def get_profile(
     
     return {
         "email": current_user.email,
+        "auth_source": getattr(request.state, "auth_source", "unknown"),
         "total_spent": round(total_spent, 2),
         "transaction_count": count,
         "created_at": current_user.created_at.strftime("%Y-%m-%d") if current_user.created_at else None
